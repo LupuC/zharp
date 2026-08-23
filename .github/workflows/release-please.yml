@@ -30,6 +30,10 @@ name: Release Please
 on:
   push:
     branches: [main]
+  # Manual trigger, for the case where a run failed for a reason outside the
+  # workflow, such as the repository setting that lets Actions open pull
+  # requests being off. Without this you have to push a commit to retry.
+  workflow_dispatch:
 
 permissions:
   contents: write
