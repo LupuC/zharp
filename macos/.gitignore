@@ -1,0 +1,10 @@
+.build/
+.swiftpm/
+dist/
+*.xcodeproj
+*.xcworkspace
+.DS_Store
+# Generated from Assets/logos by Scripts/make-icon.sh
+Packaging/AppIcon.icns
+# Machine-local dev-server config for the Claude Code preview pane
+.claude/

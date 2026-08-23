@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Zharp.App.Controls.OnboardingView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    KeyDown="OnKeyDown">
+
+    <Border Width="520" CornerRadius="12" BorderThickness="1"
+            Background="{ThemeResource FloatingPanelBrush}"
+            BorderBrush="{ThemeResource HairlineBrush}"
+            Padding="28,26,28,20">
+        <StackPanel Spacing="16">
+            <Grid MinHeight="280">
+
+                <!-- Step 0: welcome -->
+                <StackPanel x:Name="Step0" Spacing="12" VerticalAlignment="Center">
+                    <Image Source="{ThemeResource ZharpLogoImage}" Width="64" Height="64"
+                           HorizontalAlignment="Center" />
+                    <TextBlock Text="Welcome to Zharp" FontSize="22" FontWeight="SemiBold"
+                               HorizontalAlignment="Center" Margin="0,6,0,0" />
+                    <TextBlock Text="A fast, modern terminal for Windows."
+                               FontSize="13" Opacity="0.6" HorizontalAlignment="Center" />
+                </StackPanel>
+
+                <!-- Step 1: theme -->
+                <StackPanel x:Name="Step1" Spacing="8" Visibility="Collapsed">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEB01;" FontSize="19"
+                                  Foreground="{ThemeResource BarIconBrush}" />
+                        <TextBlock Text="Pick your theme" FontSize="17" FontWeight="SemiBold" />
+                    </StackPanel>
+                    <TextBlock Text="Applies instantly, to the whole app and every terminal."
+                               FontSize="12.5" Opacity="0.6" Margin="0,0,0,4" />
+                    <GridView x:Name="ThemeGrid" SelectionMode="Single" IsItemClickEnabled="False"
+                              SelectionChanged="OnThemeSelected" HorizontalAlignment="Center"
+                              ScrollViewer.VerticalScrollMode="Disabled"
+                              ScrollViewer.HorizontalScrollMode="Disabled">
+                        <GridView.ItemContainerTransitions>
+                            <TransitionCollection />
+                        </GridView.ItemContainerTransitions>
+                        <GridView.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Spacing="4" Padding="4">
+                                    <Border Width="104" Height="58" CornerRadius="6"
+                                            Background="{Binding Bg}"
+                                            BorderBrush="#40808080" BorderThickness="1">
+                                        <StackPanel Margin="10,9" Spacing="5">
+                                            <Rectangle Height="4" Width="58" HorizontalAlignment="Left"
+                                                       RadiusX="2" RadiusY="2" Fill="{Binding Fg}" />
+                                            <Rectangle Height="4" Width="38" HorizontalAlignment="Left"
+                                                       RadiusX="2" RadiusY="2" Fill="{Binding Accent}" Opacity="0.85" />
+                                            <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
+                                                <Ellipse Width="7" Height="7" Fill="{Binding C1}" />
+                                                <Ellipse Width="7" Height="7" Fill="{Binding C2}" />
+                                                <Ellipse Width="7" Height="7" Fill="{Binding C3}" />
+                                                <Ellipse Width="7" Height="7" Fill="{Binding C4}" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                    <TextBlock Text="{Binding Name}" FontSize="11"
+                                               HorizontalAlignment="Center" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </GridView.ItemTemplate>
+                    </GridView>
+                </StackPanel>
+
+                <!-- Step 2: shortcuts -->
+                <StackPanel x:Name="Step2" Spacing="8" Visibility="Collapsed">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEBD6;" FontSize="19"
+                                  Foreground="{ThemeResource BarIconBrush}" />
+                        <TextBlock Text="Handy shortcuts" FontSize="17" FontWeight="SemiBold" />
+                    </StackPanel>
+                    <TextBlock Text="The essentials - every one of them is rebindable."
+                               FontSize="12.5" Opacity="0.6" Margin="0,0,0,4" />
+                    <ItemsControl x:Name="ShortcutList">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Padding="2,5">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Name}" FontSize="13" VerticalAlignment="Center" />
+                                    <Border Grid.Column="1" Background="{ThemeResource IconChipBrush}"
+                                            CornerRadius="5" Padding="9,3">
+                                        <TextBlock Text="{Binding Keys}" FontSize="12" />
+                                    </Border>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- Step 3: done -->
+                <StackPanel x:Name="Step3" Spacing="12" Visibility="Collapsed" VerticalAlignment="Center">
+                    <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEA67;" FontSize="44"
+                              Foreground="{ThemeResource BarIconBrush}" HorizontalAlignment="Center" />
+                    <TextBlock Text="You're all set" FontSize="20" FontWeight="SemiBold"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="Themes, shells, keybindings and more live in Settings (Ctrl+,)."
+                               FontSize="13" Opacity="0.6" HorizontalAlignment="Center"
+                               TextWrapping="Wrap" TextAlignment="Center" />
+                </StackPanel>
+            </Grid>
+
+            <!-- Footer: skip / dots / back+next -->
+            <Grid>
+                <Button x:Name="SkipButton" Content="Skip" FontSize="12" Padding="10,4"
+                        Background="Transparent" BorderThickness="0" Opacity="0.65"
+                        HorizontalAlignment="Left" VerticalAlignment="Center" Click="OnSkip" />
+                <StackPanel x:Name="Dots" Orientation="Horizontal" Spacing="7"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" />
+                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                    <Button x:Name="BackButton" Content="Back" FontSize="13" Padding="14,5"
+                            Visibility="Collapsed" Click="OnBack" />
+                    <Button x:Name="NextButton" Content="Get started" FontSize="13" Padding="16,5"
+                            Style="{StaticResource AccentButtonStyle}" Click="OnNext" />
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </Border>
+</UserControl>

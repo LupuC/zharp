@@ -1,0 +1,65 @@
+name: CI Windows
+
+# Builds and tests the WinUI 3 app in windows/.
+#
+# Path filtered: a pull request that only touches macos/ or docs/ should not
+# burn a Windows runner. shared/ is included because both apps consume the
+# platform neutral assets in there, and this file is included so that changes
+# to the workflow itself are exercised by the workflow.
+#
+# The companion job that keeps the required check green when this workflow is
+# filtered out lives in ci-required.yml. Read the comment at the top of that
+# file before renaming this job.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "windows/**"
+      - "shared/**"
+      - ".github/workflows/ci-windows.yml"
+  pull_request:
+    paths:
+      - "windows/**"
+      - "shared/**"
+      - ".github/workflows/ci-windows.yml"
+
+# A second push to the same branch or pull request cancels the run that is
+# still in flight. The cancelled run belongs to a commit nobody will merge.
+concurrency:
+  group: ci-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+# Everything below is a monorepo path now, so every `run:` step starts in
+# windows/. This does not affect `uses:` steps: actions/checkout still checks
+# the whole repo out at the root.
+defaults:
+  run:
+    working-directory: windows
+
+jobs:
+  windows:
+    # The job name is the name of the status check GitHub reports. Keep it
+    # exactly "windows": it is configured as a required check on main, and
+    # ci-required.yml has a stand-in job with the same name.
+    name: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The .NET 10 SDK is the only hard prerequisite. Microsoft.WindowsAppSDK,
+      # Microsoft.Graphics.Win2D and the Windows SDK targeting pack all arrive
+      # as NuGet packages during restore, so no Visual Studio and no Windows
+      # App SDK runtime install is needed on the runner.
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      # The smoke suite is a plain console executable, not a test framework.
+      # Its exit code is the number of failed checks, so a non zero exit fails
+      # the step on its own. On success it prints "All <n> checks passed."
+      - name: Emulator smoke tests
+        run: dotnet run --project tests/Zharp.Core.SmokeTests -c Release
+
+      - name: Build app (Release)
+        run: dotnet build src/Zharp.App/Zharp.App.csproj -c Release

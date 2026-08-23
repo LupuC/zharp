@@ -1,0 +1,63 @@
+name: Shared Assets Drift
+
+# shared/ holds the platform neutral assets (themes, shell integration
+# snippets) that both apps consume. Each app keeps its own copy in the form its
+# build system needs, so the copies can silently drift apart. scripts/check-
+# shared-drift.sh compares them and exits non zero when they no longer agree.
+#
+# This check is intentionally NOT in the required checks list, so it needs no
+# stand-in job in ci-required.yml. If you do make it required, add a stand-in
+# there first or every pull request that does not touch shared/ will hang
+# waiting for a status that never arrives. The comment at the top of
+# ci-required.yml explains why.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "shared/**"
+      - "scripts/check-shared-drift.sh"
+      - ".github/workflows/shared-drift.yml"
+  pull_request:
+    paths:
+      - "shared/**"
+      - "scripts/check-shared-drift.sh"
+      - ".github/workflows/shared-drift.yml"
+      # Drift can also be introduced from the other side, by editing an app's
+      # copy without updating shared/. To catch that too, add "windows/**" and
+      # "macos/**" here. Left out for now so that ordinary app work does not
+      # pay for this job.
+
+concurrency:
+  group: shared-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shared-drift:
+    name: shared-drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check shared assets for drift
+        run: |
+          set -euo pipefail
+
+          script=scripts/check-shared-drift.sh
+          if [ ! -f "$script" ]; then
+            echo "::error::$script is missing. This workflow calls it directly."
+            exit 1
+          fi
+
+          # Run the script through bash if git did not carry the executable
+          # bit, so a forgotten `chmod +x` does not read as a drift failure.
+          if [ -x "$script" ]; then
+            "./$script"
+          else
+            echo "note: $script is not executable, running it with bash"
+            bash "$script"
+          fi
+
+          # No `|| true` and no `continue-on-error` anywhere: the step inherits
+          # the script's exit code, so a non zero exit fails the job, which
+          # fails the workflow. That is the point of the check.

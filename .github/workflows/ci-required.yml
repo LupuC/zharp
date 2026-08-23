@@ -1,0 +1,198 @@
+name: CI Required Checks
+
+# ============================================================================
+# WHY THIS FILE EXISTS
+# ============================================================================
+#
+# The problem, in one sentence: GitHub's required status checks do not
+# understand path filters, so a CI workflow that is skipped because nothing in
+# its directory changed never reports a status at all, and the pull request
+# sits there forever showing "Expected, waiting for status to be reported".
+#
+# The long version. Branch protection on main requires three checks named
+# "windows", "macos" and "linux". Those are produced by ci-windows.yml,
+# ci-macos.yml and ci-linux.yml, each of which is path filtered so that, for
+# example, a pull request touching only macos/ does not spin up a Windows
+# runner. When GitHub decides a workflow does not match its path filter, it
+# does not run it and it does not create a check run either. From branch
+# protection's point of view the "windows" check is not failing, it simply has
+# not arrived yet, so the merge button stays disabled and the pull request is
+# stuck. Nothing will ever unstick it, because the workflow that would report
+# that check is never going to run for this commit.
+#
+# The fix, which is the workaround GitHub itself documents: add a second job
+# with the SAME NAME that runs when the real one does not, and have it do
+# nothing but succeed. GitHub does not care which workflow file a check comes
+# from, only what it is called, so a check named "windows" that ran "exit 0" on
+# an Ubuntu runner satisfies the requirement exactly as well as the real
+# Windows build does. When the real build does run, the stand-in stays out of
+# the way and the real result is the one that counts.
+#
+# Yes, this looks absurd if you have never hit it. It is deliberate. Do not
+# "clean it up" by deleting the jobs below, and do not rename anything here
+# without renaming the matching job in the real workflow: the names are the
+# entire mechanism.
+#
+# ----------------------------------------------------------------------------
+# Why the inverse filter is computed at runtime instead of with paths-ignore
+# ----------------------------------------------------------------------------
+#
+# The textbook form of this trick is a companion workflow whose `on:` block
+# carries the exact inverse filter, `paths-ignore`, of the real one. That works
+# when there is one filter to invert. Here there are three different ones:
+#
+#   windows CI watches  windows/**  shared/**  .github/workflows/ci-windows.yml
+#   macos   CI watches  macos/**    shared/**  .github/workflows/ci-macos.yml
+#   linux   CI watches  linux/**               .github/workflows/ci-linux.yml
+#
+# and a workflow file has exactly one `on:` block shared by all of its jobs, so
+# it cannot carry three different inverse filters. A single union style
+# paths-ignore is not a substitute: a pull request that touches only windows/
+# would match the ignore list, this whole workflow would be skipped, and the
+# "macos" and "linux" checks would go missing, which is the exact failure this
+# file is here to prevent.
+#
+# So the filter is evaluated in the `changes` job instead, from the list of
+# files the pull request actually touches, using the same path globs the real
+# workflows use. Each stand-in then runs only when its real workflow did not.
+# If you change a `paths:` list in ci-windows.yml, ci-macos.yml or
+# ci-linux.yml, change the matching regex below in the same commit.
+#
+# ----------------------------------------------------------------------------
+# Notes
+# ----------------------------------------------------------------------------
+#
+# * Pull requests only. Required status checks gate merging a pull request;
+#   there is no merge button on a push to main, so a stand-in there would
+#   report a status nobody reads.
+# * A stand-in that is skipped by its `if:` still reports a check run, with the
+#   conclusion "skipped", which branch protection accepts. The authoritative
+#   result in that case is the real job from the real workflow.
+# * The stand-ins all run on ubuntu-latest regardless of what they are named.
+#   They run `exit 0`. Paying for a Windows or macOS runner to do that would be
+#   silly.
+# * If a merge queue is ever enabled on this repository, the queue runs checks
+#   on `merge_group` events, which none of these workflows listen to yet. That
+#   needs the same treatment, one event at a time.
+# ============================================================================
+
+on:
+  pull_request:
+
+concurrency:
+  group: ci-required-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Works out which of the three platform CI workflows GitHub will have run for
+  # this pull request, by matching its changed files against the same path
+  # globs those workflows declare.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      windows: ${{ steps.detect.outputs.windows }}
+      macos: ${{ steps.detect.outputs.macos }}
+      linux: ${{ steps.detect.outputs.linux }}
+    steps:
+      # fetch-depth: 0 because the diff below needs both the base commit and
+      # the head commit present locally. The default shallow clone has neither.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect which platform directories changed
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Three dots, not two: this asks for the files the pull request
+          # itself changes, measured from the merge base, which is exactly what
+          # GitHub's own path filters look at. A two dot diff would also list
+          # files that changed on main since the branch was cut.
+          files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+
+          echo "Files changed by this pull request:"
+          echo "$files"
+          echo
+
+          # $1 is the platform, $2 is a regex covering the paths that
+          # platform's CI workflow watches. Output "true" when that CI ran, so
+          # the stand-in below stays out of the way.
+          decide() {
+            # A herestring, deliberately, not `printf ... | grep -Eq`. grep -q
+            # stops reading at the first match; on a diff big enough to fill
+            # the 64K pipe buffer that leaves printf writing to a closed pipe,
+            # printf dies of SIGPIPE with status 141, and `set -o pipefail`
+            # promotes that to the status of the whole pipeline. The `if` then
+            # reads a match as a miss: the stand-in would run alongside the
+            # real job, two check runs would share one name, and whichever
+            # finished last would decide the required check. A herestring has
+            # no pipe and no such failure mode.
+            if grep -Eq "$2" <<< "$files"; then
+              echo "$1=true" >> "$GITHUB_OUTPUT"
+              echo "$1: real CI ran, no stand-in needed"
+            else
+              echo "$1=false" >> "$GITHUB_OUTPUT"
+              echo "$1: real CI was filtered out, stand-in will report the check"
+            fi
+          }
+
+          # Keep these three lines in sync with the `paths:` lists in
+          # ci-windows.yml, ci-macos.yml and ci-linux.yml.
+          decide windows '^(windows/|shared/|\.github/workflows/ci-windows\.yml$)'
+          decide macos   '^(macos/|shared/|\.github/workflows/ci-macos\.yml$)'
+          decide linux   '^(linux/|\.github/workflows/ci-linux\.yml$)'
+
+  # --------------------------------------------------------------------------
+  # The stand-ins. Each one carries the name of a required check and does
+  # nothing at all. See the essay at the top of the file.
+  # --------------------------------------------------------------------------
+
+  windows:
+    name: windows
+    needs: changes
+    if: needs.changes.outputs.windows == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Nothing for Windows CI to do
+        run: |
+          echo "No files under windows/ or shared/ changed in this pull"
+          echo "request, so ci-windows.yml was filtered out and will never"
+          echo "report the required 'windows' check. This job reports it"
+          echo "instead, so the pull request is not stuck waiting for a"
+          echo "status that is not coming."
+          exit 0
+
+  macos:
+    name: macos
+    needs: changes
+    if: needs.changes.outputs.macos == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Nothing for macOS CI to do
+        run: |
+          echo "No files under macos/ or shared/ changed in this pull"
+          echo "request, so ci-macos.yml was filtered out and will never"
+          echo "report the required 'macos' check. This job reports it"
+          echo "instead, so the pull request is not stuck waiting for a"
+          echo "status that is not coming."
+          exit 0
+
+  linux:
+    name: linux
+    needs: changes
+    if: needs.changes.outputs.linux == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Nothing for Linux CI to do
+        run: |
+          echo "No files under linux/ changed in this pull request, so"
+          echo "ci-linux.yml was filtered out and will never report the"
+          echo "required 'linux' check. This job reports it instead, so the"
+          echo "pull request is not stuck waiting for a status that is not"
+          echo "coming."
+          exit 0

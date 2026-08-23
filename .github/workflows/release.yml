@@ -1,0 +1,224 @@
+name: Release Artifacts
+
+# Builds every platform for one release and attaches all of it to that single
+# GitHub release. release-please.yml publishes the release; this workflow fills
+# it with downloads.
+#
+# The two jobs are independent and run on their own runners, so a Windows
+# failure never costs you the macOS disk image or the other way round. Rerun
+# just the failed job from the Actions tab.
+#
+# Assets attached per release:
+#   Windows  ZharpSetup-<version>.exe, ZharpSetup-<version>.exe.sha256,
+#            ZharpSetup.exe          (stable name, for /releases/latest/download)
+#   macOS    Zharp-<version>.dmg,     Zharp-<version>.dmg.sha256,
+#            Zharp.dmg               (stable name, for /releases/latest/download)
+
+on:
+  release:
+    types: [published]
+  # Manual rebuild for a release whose assets are missing, most often because
+  # the release was published with the default bot token, which does not fire
+  # the `release` event above. Pass the tag exactly as it appears on the
+  # release, including the leading v.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build assets for (e.g. v0.15.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      # release-please bumps every platform to the same number, so a mismatch
+      # here means something was edited by hand or the release was tagged off a
+      # commit that predates the bump. Stop now rather than publish an
+      # installer whose filename contradicts the release it hangs under.
+      - name: Check version.txt matches the release tag
+        shell: pwsh
+        run: |
+          $expected = $env:RELEASE_TAG -replace '^v', ''
+          $actual = (Get-Content version.txt -Raw).Trim()
+          if ($expected -ne $actual) {
+            Write-Host "::error::windows/version.txt says $actual but the release tag is $env:RELEASE_TAG (expected $expected)."
+            exit 1
+          }
+          Write-Host "windows/version.txt is $actual, matching $env:RELEASE_TAG."
+
+      - name: Emulator smoke tests
+        run: dotnet run --project tests/Zharp.Core.SmokeTests -c Release
+
+      # BaseOutputPath is load-bearing: installer/zharp.iss hardcodes
+      # src\Zharp.App\bin\pub\...\publish as its source directory.
+      - name: Publish self-contained
+        run: dotnet publish src/Zharp.App/Zharp.App.csproj -c Release -r win-x64 --self-contained true -p:BaseOutputPath=bin\pub\
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile installer
+        run: iscc installer\zharp.iss
+
+      - name: Upload release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $versioned = Get-Item installer\Output\ZharpSetup-*.exe | Select-Object -First 1
+          Copy-Item $versioned.FullName installer\Output\ZharpSetup.exe
+          $hash = (Get-FileHash $versioned.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($versioned.Name)" | Out-File -Encoding ascii "$($versioned.FullName).sha256"
+          gh release upload $env:RELEASE_TAG `
+            $versioned.FullName "$($versioned.FullName).sha256" installer\Output\ZharpSetup.exe --clobber
+
+      # Opens the version-bump pull request against microsoft/winget-pkgs.
+      # Needs the WINGET_TOKEN secret (a PAT with public_repo) and the package
+      # to exist there already - see windows/packaging/winget/README.md.
+      # Without the secret this logs a line and moves on, so a release never
+      # fails over it.
+      - name: Update the winget manifest
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if (-not $env:WINGET_TOKEN) {
+            Write-Host "WINGET_TOKEN is not set - skipping the winget submission."
+            exit 0
+          }
+          $version = $env:RELEASE_TAG -replace '^v', ''
+          $url = "https://zharp.app/download/windows/$version"
+
+          # The site serves this straight from the release assets uploaded a
+          # moment ago, so give it a chance to appear before wingetcreate
+          # fetches the installer to hash it.
+          $serving = $false
+          foreach ($attempt in 1..12) {
+            $head = Invoke-WebRequest -Uri $url -Method Head -MaximumRedirection 5 `
+              -SkipHttpErrorCheck -ErrorAction SilentlyContinue
+            if ($head.StatusCode -eq 200) { $serving = $true; break }
+            Start-Sleep -Seconds 15
+          }
+          if (-not $serving) {
+            Write-Host "::warning::$url is not serving yet - skipping the winget submission."
+            exit 0
+          }
+
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          .\wingetcreate.exe update Zharp.Zharp --version $version --urls $url `
+            --submit --token $env:WINGET_TOKEN
+          # The installer is published and attached by now; winget is the last
+          # mile, and a slow review or an outage there must not mark the
+          # release itself as failed.
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::winget submission failed (exit $LASTEXITCODE). The release is unaffected - open the version bump by hand if it keeps failing."
+            exit 0
+          }
+
+  macos:
+    name: macOS disk image
+    # Intel-only build, matching what the website advertises; it runs on Apple
+    # Silicon through Rosetta 2 until the native ARM build ships. The runners
+    # are Apple Silicon (macos-13, the last Intel image, has been retired), so
+    # the binary is cross-compiled with --arch x86_64.
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: macos
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      # Job-level so the `if:` guards below can read them: a step's own `env:`
+      # is not in scope when its `if:` is evaluated.
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+      MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      # macos/version.txt is what names the disk image and what gets baked into
+      # Info.plist, so a mismatch would attach Zharp-0.14.1.dmg to release
+      # v0.15.0. Fail here instead.
+      - name: Check version.txt matches the release tag
+        run: |
+          expected="${RELEASE_TAG#v}"
+          actual=$(tr -d '[:space:]' < version.txt)
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::macos/version.txt says $actual but the release tag is $RELEASE_TAG (expected $expected)."
+            exit 1
+          fi
+          echo "macos/version.txt is $actual, matching $RELEASE_TAG."
+
+      - name: Emulator smoke tests
+        run: swift run -c release ZharpCoreSmokeTests
+
+      # Signing is optional: with the certificate secrets set the app and image
+      # are signed with a Developer ID, otherwise the packaging scripts fall
+      # back to an ad-hoc signature (fine to install, but Gatekeeper warns).
+      - name: Import signing certificate
+        if: env.MACOS_CERTIFICATE != ''
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > /tmp/certificate.p12
+          security create-keychain -p actions build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import /tmp/certificate.p12 -k build.keychain \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k actions build.keychain
+          rm -f /tmp/certificate.p12
+
+      - name: Package .app
+        run: ./Scripts/make-app.sh release --arch x86_64
+
+      - name: Package .dmg
+        run: ./Scripts/make-dmg.sh
+
+      # Notarization is what removes the "unidentified developer" prompt on a
+      # downloaded image. Skipped when the credentials are not configured.
+      - name: Notarize
+        if: env.MACOS_NOTARY_APPLE_ID != ''
+        run: |
+          version=$(tr -d '[:space:]' < version.txt)
+          xcrun notarytool submit "dist/Zharp-$version.dmg" \
+            --apple-id "$MACOS_NOTARY_APPLE_ID" \
+            --password "$MACOS_NOTARY_PASSWORD" \
+            --team-id "$MACOS_NOTARY_TEAM_ID" \
+            --wait
+          xcrun stapler staple "dist/Zharp-$version.dmg"
+          # Stapling changes the file, so the checksum has to be recomputed.
+          shasum -a 256 "dist/Zharp-$version.dmg" | sed 's|dist/||' \
+            > "dist/Zharp-$version.dmg.sha256"
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(tr -d '[:space:]' < version.txt)
+          versioned="dist/Zharp-$version.dmg"
+          cp "$versioned" dist/Zharp.dmg
+          gh release upload "$RELEASE_TAG" \
+            "$versioned" "$versioned.sha256" dist/Zharp.dmg --clobber

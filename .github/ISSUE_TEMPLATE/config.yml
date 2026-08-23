@@ -1,0 +1,17 @@
+# Issue template chooser configuration.
+# Setting blank_issues_enabled to false removes the "Open a blank issue" escape hatch,
+# so every new issue comes in through one of the forms in this directory.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Question or help using Zharp
+    url: https://github.com/LupuC/zharp/discussions/categories/q-a
+    about: "Not sure if something is a bug? Stuck on shell integration or a config file? Ask in Discussions, Q&A. Questions opened as issues will be moved there."
+
+  - name: Idea or feedback you want to talk through first
+    url: https://github.com/LupuC/zharp/discussions/categories/ideas
+    about: "Half formed ideas, feature brainstorming, and design debates belong in Discussions, Ideas. Once an idea is concrete, open a feature request issue."
+
+  - name: Show what you built or share a theme
+    url: https://github.com/LupuC/zharp/discussions
+    about: "Themes, screenshots, workflows, and anything else worth sharing with other Zharp users."

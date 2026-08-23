@@ -1,0 +1,44 @@
+name: CI Linux
+
+# Placeholder. linux/ is an empty slot in the monorepo: no code, no toolchain
+# picked yet. This workflow exists so that the "linux" status check is a real
+# check from day one, which means it can be added to the branch protection
+# rules now and filled in with an actual build later without anyone having to
+# touch the repository settings again.
+#
+# When the Linux app lands, replace the single step below with the real build
+# and test commands and add a `defaults.run.working-directory: linux` block,
+# the way ci-windows.yml and ci-macos.yml do.
+#
+# The companion job that keeps the required check green when this workflow is
+# filtered out lives in ci-required.yml. Read the comment at the top of that
+# file before renaming this job.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "linux/**"
+      - ".github/workflows/ci-linux.yml"
+  pull_request:
+    paths:
+      - "linux/**"
+      - ".github/workflows/ci-linux.yml"
+
+concurrency:
+  group: ci-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    # Keep this name exactly "linux": it is the required status check, and
+    # ci-required.yml has a stand-in job with the same name.
+    name: linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: No Linux code yet
+        run: |
+          echo "linux/ is a placeholder in this monorepo."
+          echo "There is no Linux source, no build system and no chosen"
+          echo "toolchain yet, so there is nothing to compile or test."
+          echo "This job succeeds on purpose."

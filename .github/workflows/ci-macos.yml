@@ -1,0 +1,97 @@
+name: CI macOS
+
+# Builds, tests and packages the AppKit app in macos/.
+#
+# Path filtered the same way as ci-windows.yml: macos/ for the app itself,
+# shared/ for the platform neutral assets both apps consume, and this file so
+# that changes to the workflow are exercised by the workflow.
+#
+# The companion job that keeps the required check green when this workflow is
+# filtered out lives in ci-required.yml. Read the comment at the top of that
+# file before renaming this job.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "macos/**"
+      - "shared/**"
+      - ".github/workflows/ci-macos.yml"
+  pull_request:
+    paths:
+      - "macos/**"
+      - "shared/**"
+      - ".github/workflows/ci-macos.yml"
+
+concurrency:
+  group: ci-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every `run:` step starts in macos/. The Swift package, the Scripts/ helpers
+# and version.txt are all relative to that directory, so nothing below needs a
+# `cd`. `uses:` steps are unaffected: checkout still lands at the repo root.
+defaults:
+  run:
+    working-directory: macos
+
+jobs:
+  macos:
+    # The job name is the name of the status check GitHub reports. Keep it
+    # exactly "macos": it is configured as a required check on main, and
+    # ci-required.yml has a stand-in job with the same name.
+    name: macos
+    # GitHub's macOS runners are Apple Silicon now (macos-13, the last Intel
+    # image, has been retired), so the Intel binary Zharp ships is produced by
+    # cross-compiling with --arch x86_64. Add --arch arm64 to go universal.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Printed so a failure caused by a toolchain bump on the runner image is
+      # obvious in the log. The package needs Swift 5.9 or newer.
+      - name: Swift version
+        run: swift --version
+
+      # Extracts the zsh and bash integration templates embedded in
+      # Sources/ZharpApp/ShellDiscovery.swift and runs `zsh -n` / `bash -n` on
+      # them, so a syntax error in a template cannot reach a user's shell.
+      # Needs python3, zsh and bash, all present on the runner image.
+      - name: Shell integration templates
+        run: ./Scripts/check-shell-templates.sh
+
+      # The suite is a plain executable target, not XCTest (XCTest would need a
+      # full Xcode install). Its exit code is the number of failed checks, so a
+      # non zero exit fails the step. On success it prints
+      # "All <n> checks passed."
+      - name: Emulator smoke tests
+        run: swift run -c release ZharpCoreSmokeTests
+
+      - name: Package .app
+        run: ./Scripts/make-app.sh release --arch x86_64
+
+      - name: Verify the bundle
+        run: |
+          test -x dist/Zharp.app/Contents/MacOS/Zharp
+          test -f dist/Zharp.app/Contents/Info.plist
+          test -f dist/Zharp.app/Contents/Resources/AppIcon.icns
+          # Resources ship flat in Contents/Resources, not as a nested
+          # SwiftPM .bundle, so codesign --deep accepts the app.
+          test -f dist/Zharp.app/Contents/Resources/tabler-icons.ttf
+          test -f dist/Zharp.app/Contents/Resources/DMMono-Medium.ttf
+          # Both brand-mark variants ship: cream for dark themes, ink for light.
+          test -f dist/Zharp.app/Contents/Resources/logo-cream.png
+          test -f dist/Zharp.app/Contents/Resources/logo-ink.png
+          # The icon font is the 1.25px-stroke subset, not the 2.8MB original.
+          test "$(stat -f%z dist/Zharp.app/Contents/Resources/tabler-icons.ttf)" -lt 65536
+          test ! -e dist/Zharp.app/Contents/MacOS/Zharp_ZharpApp.bundle
+          codesign --verify --deep --strict dist/Zharp.app
+          # The Info.plist version must match version.txt.
+          plist=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" dist/Zharp.app/Contents/Info.plist)
+          expected=$(tr -d '[:space:]' < version.txt)
+          echo "bundle $plist, version.txt $expected"
+          test "$plist" = "$expected"
+          # The release ships Intel-only; fail if the cross-compile silently
+          # fell back to the runner's native architecture.
+          archs=$(lipo -archs dist/Zharp.app/Contents/MacOS/Zharp)
+          echo "architectures: $archs"
+          test "$archs" = "x86_64"

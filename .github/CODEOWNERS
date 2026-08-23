@@ -1,0 +1,30 @@
+# CODEOWNERS for Zharp.
+#
+# GitHub reads this file to decide who gets automatically requested for review on a
+# pull request. Later matching rules win over earlier ones, so the catch-all comes
+# first and the per directory rules below it are the ones that actually apply.
+#
+# Note that this file only requests reviews. It does not block anything on its own:
+# review is only enforced once a branch protection rule on `main` turns on
+# "Require review from Code Owners".
+
+# Everything in the repo, unless a rule below overrides it.
+*                   @LupuC
+
+# Windows app, C# and WinUI 3.
+/windows/           @LupuC
+
+# macOS app, Swift and AppKit.
+/macos/             @LupuC
+
+# Linux port. No code yet, the toolkit has not been chosen. See linux/README.md.
+/linux/             @LupuC
+
+# Platform neutral assets shared by every app: icons, fonts, brand files, and
+# anything else all three platforms compile or ship.
+#
+# This directory deliberately requires maintainer review. A change here is never
+# local: swapping a font, renaming an icon, or editing a shared colour ripples into
+# the Windows build, the macOS build, and eventually the Linux one, and a mistake
+# breaks all of them at once. Review here is about that blast radius, not distrust.
+/shared/            @LupuC

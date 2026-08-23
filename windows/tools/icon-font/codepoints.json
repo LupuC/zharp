@@ -1,0 +1,20 @@
+{
+ "circle-check": 60007,
+ "info-circle": 60101,
+ "layout-sidebar": 60122,
+ "palette": 60161,
+ "plus": 60171,
+ "prompt": 60175,
+ "search": 60188,
+ "settings": 60192,
+ "x": 60245,
+ "keyboard": 60374,
+ "terminal": 60380,
+ "history": 60394,
+ "terminal-2": 60399,
+ "brand-ubuntu": 61273,
+ "brand-git": 61295,
+ "asterisk": 61397,
+ "brand-powershell": 62957,
+ "brand-openai": 63374
+}

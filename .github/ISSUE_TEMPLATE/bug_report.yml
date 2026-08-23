@@ -1,0 +1,143 @@
+name: Bug report
+description: Something in Zharp is broken, crashes, or behaves differently than you expected.
+title: "bug: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. The more precisely you fill this in, the faster it gets fixed.
+
+        A terminal emulator sits between your shell, your programs and the OS, so the boring
+        details (which shell, which OS build, which Zharp version) are usually the ones that
+        decide whether the bug reproduces on our machines. Please do not skip them.
+
+  - type: checkboxes
+    id: search
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched the existing issues, open and closed, and this is not already reported.
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Describe the actual behaviour. Paste the exact error text if there is any, and attach a screenshot or a short screen recording if the problem is visual.
+      placeholder: |
+        When I run a long build, the command block stops updating after about ten seconds.
+        The output keeps scrolling in the terminal but the block stays collapsed and the
+        agent status indicator stays on "running" even after the command exits.
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-expected
+    attributes:
+      label: What you expected to happen
+      description: One or two sentences is enough.
+      placeholder: The block should stay in sync with the output, and the status indicator should go back to idle when the command exits.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Numbered steps, starting from a freshly launched Zharp window. Include the exact commands you typed.
+        If it only happens with a specific config, theme, or shell startup file, say so and paste the relevant lines.
+      placeholder: |
+        1. Open a new Zharp window.
+        2. Run: `for i in $(seq 1 200); do echo "line $i"; sleep 0.1; done`
+        3. Wait about ten seconds.
+        4. The block header stops updating.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Which build of Zharp are you running?
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: zharp-version
+    attributes:
+      label: Zharp version
+      description: |
+        On macOS: the Zharp menu, then "About Zharp".
+        If you built from source, run `git describe --tags --always` inside your clone and paste the output.
+      placeholder: "0.15.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      description: |
+        Please paste the output of the command for your platform, do not just write "latest".
+
+        macOS, in any terminal:
+        `sw_vers -productVersion && uname -m`
+
+        Windows, in PowerShell:
+        `[System.Environment]::OSVersion.Version.ToString()`
+
+        Linux, in any terminal:
+        `cat /etc/os-release | head -2 && uname -r`
+      placeholder: "macOS 15.5, arm64"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: shell
+    attributes:
+      label: Shell
+      description: |
+        Which shell is running inside the Zharp tab where the bug happens? Shell integration
+        (the OSC 133 block markers and the OSC 7 working directory reports) is wired up
+        differently for each shell, so this decides a lot of bugs.
+
+        If you are not sure, run `echo $0` (bash, zsh, fish) or `$host.Name` (PowerShell).
+      options:
+        - bash
+        - zsh
+        - fish
+        - PowerShell 7 (pwsh)
+        - Windows PowerShell 5.1
+        - cmd.exe
+        - nushell
+        - Other (name it in the field below)
+    validations:
+      required: true
+
+  - type: input
+    id: shell-version
+    attributes:
+      label: Shell version, and shell name if you picked "Other"
+      description: |
+        Run one of these and paste the first line:
+        `bash --version`, `zsh --version`, `fish --version`, `pwsh --version`, `nu --version`
+      placeholder: "zsh 5.9 (arm64-apple-darwin24.0)"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: shell-integration
+    attributes:
+      label: Shell integration
+      description: Optional, but it helps a lot for anything involving blocks, prompts, or the current directory.
+      options:
+        - label: Zharp shell integration is installed and active in the shell where this happens.
+          required: false
+        - label: The bug still happens with my shell startup files disabled (for example `zsh -f`, `bash --noprofile --norc`).
+          required: false

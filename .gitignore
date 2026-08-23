@@ -1,0 +1,75 @@
+# Root .gitignore for the Zharp monorepo.
+#
+#   windows/   C# WinUI 3 app, built with MSBuild and the .NET SDK
+#   macos/     Swift AppKit app, built with Swift Package Manager
+#   linux/     placeholder, no code yet
+#   shared/    platform neutral assets
+#
+# How to read the rules below: a pattern with no slash in it (like `bin/`) matches at
+# any depth anywhere in the repo. A pattern that contains a slash (like
+# `windows/installer/Output/`) is anchored to the directory holding this file, which is
+# the repo root. That is why the two anchored rules carry a platform prefix here even
+# though they did not in the per platform files they came from.
+
+# ---------------------------------------------------------------------------
+# Cross platform: OS and editor droppings
+# ---------------------------------------------------------------------------
+
+# Finder metadata. Turns up in any directory a macOS machine has browsed, so it is
+# not scoped to macos/.
+.DS_Store
+
+# Machine local dev server config for the Claude Code preview pane. Personal to
+# whoever is running it, never shared.
+.claude/
+
+# ---------------------------------------------------------------------------
+# windows/  C# WinUI 3 app
+# ---------------------------------------------------------------------------
+
+# MSBuild and .NET build output. Left unanchored on purpose: every project under
+# windows/src, windows/tests and windows/tools generates its own pair of these.
+bin/
+obj/
+
+# Visual Studio per user settings (window layout, startup project, breakpoints).
+*.user
+
+# Visual Studio solution cache directory.
+.vs/
+
+# MSBuild binary logs, produced by `dotnet build -bl` when diagnosing a slow or
+# failing build. Useful locally, far too large to commit.
+*.binlog
+
+# Inno Setup compiler output, the installer exe and its SHA-256 file. These are
+# release artifacts, they get attached to the GitHub release instead.
+windows/installer/Output/
+
+# ---------------------------------------------------------------------------
+# macos/  Swift AppKit app
+# ---------------------------------------------------------------------------
+
+# Swift Package Manager build directory and its per user state.
+.build/
+.swiftpm/
+
+# Assembled Zharp.app and the packaged dmg. Release artifacts, same reasoning as
+# the Windows installer output above.
+dist/
+
+# Xcode projects and workspaces are generated on demand from Package.swift
+# (`swift package generate-xcodeproj`, or just opening Package.swift in Xcode).
+# Nothing here is a source of truth, so nothing here is committed.
+*.xcodeproj
+*.xcworkspace
+
+# Generated from macos/Assets/logos by macos/Scripts/make-icon.sh, and rebuilt by
+# `make icon` as part of `make app`.
+macos/Packaging/AppIcon.icns
+
+# ---------------------------------------------------------------------------
+# linux/  nothing to ignore yet
+# ---------------------------------------------------------------------------
+# There is no Linux code and no toolkit chosen, so there is no build output to
+# ignore. Add the rules here when that changes. See linux/README.md.

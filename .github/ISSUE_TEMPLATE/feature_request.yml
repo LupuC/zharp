@@ -1,0 +1,74 @@
+name: Feature request
+description: Suggest a new feature or a change to how something in Zharp works.
+title: "feat: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Good feature requests start with the problem, not the solution. Tell us what you were
+        trying to do and where Zharp got in the way, then describe what you think should happen.
+        That way we can consider fixes you have not thought of.
+
+  - type: checkboxes
+    id: search
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched the existing issues, open and closed, and this is not already requested.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what makes it hard or impossible today? Be concrete, a real example from your own work is worth more than a general principle.
+      placeholder: |
+        I keep several tabs open on different servers and I cannot tell at a glance which one
+        is still running a deploy. I end up clicking through every tab to check.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: The solution you have in mind
+      description: |
+        Describe the behaviour you want. If it involves UI, say where it lives (tab bar, block header,
+        command palette, settings) and what it looks like. A rough sketch or a mockup image is welcome.
+        If you considered other approaches and rejected them, say why.
+      placeholder: |
+        Show a small dot on the tab title while a command is running in that tab, and clear it
+        when the command exits. Colour it red if the command exited non-zero, so a failed deploy
+        is visible without switching tabs.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: platforms
+    attributes:
+      label: Which platforms should this apply to
+      description: Tick everything that makes sense. Most features should land everywhere eventually, but it is fine to propose something that only makes sense on one platform.
+      options:
+        - label: Windows
+          required: false
+        - label: macOS
+          required: false
+        - label: Linux (planned, no code yet)
+          required: false
+
+  - type: dropdown
+    id: willing-to-work
+    attributes:
+      label: Are you willing to work on this
+      description: |
+        Saying no is completely fine, ideas are useful on their own. Saying yes just means we will
+        talk through the approach with you in this issue before you start writing code, so you do
+        not spend a weekend on something that gets rejected.
+      options:
+        - "Yes, I would like to implement this"
+        - "Yes, but I would need guidance on where to start"
+        - "I can help test it, but not write it"
+        - "No, I am just suggesting the idea"
+    validations:
+      required: true

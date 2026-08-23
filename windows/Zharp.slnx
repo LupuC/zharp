@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Zharp.App/Zharp.App.csproj" />
+    <Project Path="src/Zharp.Core/Zharp.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Zharp.Core.SmokeTests/Zharp.Core.SmokeTests.csproj" />
+  </Folder>
+</Solution>

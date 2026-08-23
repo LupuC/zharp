@@ -1,0 +1,553 @@
+<UserControl
+    x:Class="Zharp.App.Controls.SettingsView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid>
+        <Grid.Resources>
+
+            <Style x:Key="SectionHeader" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="15" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Margin" Value="0,22,0,6" />
+            </Style>
+            <Style x:Key="FirstSectionHeader" TargetType="TextBlock" BasedOn="{StaticResource SectionHeader}">
+                <Setter Property="Margin" Value="0,4,0,6" />
+            </Style>
+            <Style x:Key="SectionDivider" TargetType="Rectangle">
+                <Setter Property="Height" Value="1" />
+                <Setter Property="Fill" Value="{ThemeResource SectionDividerBrush}" />
+                <Setter Property="Margin" Value="0,16,0,0" />
+                <Setter Property="HorizontalAlignment" Value="Stretch" />
+            </Style>
+            <Style x:Key="SettingTitle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="13" />
+            </Style>
+            <Style x:Key="SettingDescription" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="11.5" />
+                <Setter Property="Opacity" Value="0.55" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+            </Style>
+        </Grid.Resources>
+
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="NavColumn" Width="180" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Navigation rail -->
+        <Grid Background="{ThemeResource PanelOverlayBrush}" BorderBrush="{ThemeResource HairlineBrush}" BorderThickness="0,0,1,0">
+            <ListView x:Name="NavRail" Margin="0,8,0,0" SelectionMode="Single"
+                      SelectionChanged="OnNavChanged">
+                <ListView.ItemContainerTransitions>
+                    <TransitionCollection />
+                </ListView.ItemContainerTransitions>
+                <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem" BasedOn="{StaticResource RoundedListViewItem}">
+                        <Setter Property="Margin" Value="6,2" />
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="MinHeight" Value="0" />
+                        <Setter Property="CornerRadius" Value="6" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    </Style>
+                </ListView.ItemContainerStyle>
+                <ListViewItem>
+                    <StackPanel Orientation="Horizontal" Spacing="10" Padding="8,8">
+                        <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEB01;" FontSize="19" Foreground="{ThemeResource BarIconBrush}" />
+                        <TextBlock Text="Appearance" FontSize="12.5" VerticalAlignment="Center" />
+                    </StackPanel>
+                </ListViewItem>
+                <ListViewItem>
+                    <StackPanel Orientation="Horizontal" Spacing="10" Padding="8,8">
+                        <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEBEF;" FontSize="19" Foreground="{ThemeResource BarIconBrush}" />
+                        <TextBlock Text="Terminal" FontSize="12.5" VerticalAlignment="Center" />
+                    </StackPanel>
+                </ListViewItem>
+                <ListViewItem>
+                    <StackPanel Orientation="Horizontal" Spacing="10" Padding="8,8">
+                        <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEB0F;" FontSize="19" Foreground="{ThemeResource BarIconBrush}" />
+                        <TextBlock Text="Shell" FontSize="12.5" VerticalAlignment="Center" />
+                    </StackPanel>
+                </ListViewItem>
+                <ListViewItem>
+                    <StackPanel Orientation="Horizontal" Spacing="10" Padding="8,8">
+                        <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEBD6;" FontSize="19" Foreground="{ThemeResource BarIconBrush}" />
+                        <TextBlock Text="Shortcuts" FontSize="12.5" VerticalAlignment="Center" />
+                    </StackPanel>
+                </ListViewItem>
+                <ListViewItem>
+                    <StackPanel Orientation="Horizontal" Spacing="10" Padding="8,8">
+                        <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEAC5;" FontSize="19" Foreground="{ThemeResource BarIconBrush}" />
+                        <TextBlock Text="About" FontSize="12.5" VerticalAlignment="Center" />
+                    </StackPanel>
+                </ListViewItem>
+            </ListView>
+        </Grid>
+
+        <!-- Pages: a centered column (Stretch + MaxWidth centers automatically) -->
+        <ScrollViewer x:Name="PageScroller" Grid.Column="1" Padding="32,20,32,28" VerticalScrollBarVisibility="Auto">
+            <Grid>
+                <!-- ============ Appearance ============ -->
+                <StackPanel x:Name="AppearancePage" MaxWidth="720">
+                    <TextBlock Text="Theme" Style="{StaticResource FirstSectionHeader}" />
+                    <TextBlock Text="Applies live to the whole app and all terminals."
+                               Style="{StaticResource SettingDescription}" Margin="0,0,0,6" />
+
+                    <GridView x:Name="ThemeGrid" SelectionMode="Single" IsItemClickEnabled="False"
+                              SelectionChanged="OnThemeSelected"
+                              ScrollViewer.VerticalScrollMode="Disabled"
+                              ScrollViewer.HorizontalScrollMode="Disabled">
+                        <GridView.ItemContainerTransitions>
+                            <TransitionCollection />
+                        </GridView.ItemContainerTransitions>
+                        <GridView.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Spacing="4" Padding="4">
+                                    <Border Width="104" Height="58" CornerRadius="6"
+                                            Background="{Binding Bg}"
+                                            BorderBrush="#40808080" BorderThickness="1">
+                                        <StackPanel Margin="10,9" Spacing="5">
+                                            <Rectangle Height="4" Width="58" HorizontalAlignment="Left"
+                                                       RadiusX="2" RadiusY="2" Fill="{Binding Fg}" />
+                                            <Rectangle Height="4" Width="38" HorizontalAlignment="Left"
+                                                       RadiusX="2" RadiusY="2" Fill="{Binding Accent}" Opacity="0.85" />
+                                            <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
+                                                <Ellipse Width="7" Height="7" Fill="{Binding C1}" />
+                                                <Ellipse Width="7" Height="7" Fill="{Binding C2}" />
+                                                <Ellipse Width="7" Height="7" Fill="{Binding C3}" />
+                                                <Ellipse Width="7" Height="7" Fill="{Binding C4}" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                    <TextBlock Text="{Binding Name}" FontSize="11"
+                                               HorizontalAlignment="Center" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </GridView.ItemTemplate>
+                    </GridView>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                    <TextBlock Text="Window" Style="{StaticResource SectionHeader}" />
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Backdrop material" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="What shows through translucent surfaces." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <ComboBox x:Name="BackdropCombo" FontSize="13" Grid.Column="1" Width="170"
+                                  VerticalAlignment="Center" SelectionChanged="OnBackdropChanged">
+                            <ComboBoxItem Content="Mica" />
+                            <ComboBoxItem Content="Acrylic (blur)" />
+                        </ComboBox>
+                    </Grid>
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Window opacity" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Lower lets the backdrop blur show through. Applies live." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <Slider x:Name="OpacitySlider" Grid.Column="1" Width="200"
+                                Minimum="50" Maximum="100" StepFrequency="1"
+                                VerticalAlignment="Center" ValueChanged="OnOpacityChanged" />
+                    </Grid>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                    <TextBlock Text="Tabs" Style="{StaticResource SectionHeader}" />
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Tab layout" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Where session tabs live." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <ComboBox x:Name="LayoutCombo" FontSize="13" Grid.Column="1" Width="200"
+                                  VerticalAlignment="Center" SelectionChanged="OnLayoutChanged">
+                            <ComboBoxItem Content="Sidebar (vertical)" />
+                            <ComboBoxItem Content="Top strip (horizontal)" />
+                        </ComboBox>
+                    </Grid>
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Density" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Compact shows single-line session cards." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <ComboBox x:Name="DensityCombo" FontSize="13" Grid.Column="1" Width="160"
+                                  VerticalAlignment="Center" SelectionChanged="OnDensityChanged">
+                            <ComboBoxItem Content="Comfortable" />
+                            <ComboBoxItem Content="Compact" />
+                        </ComboBox>
+                    </Grid>
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Tab title" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="What the first line of a session card shows." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <ComboBox x:Name="TitleModeCombo" FontSize="13" Grid.Column="1" Width="180"
+                                  VerticalAlignment="Center" SelectionChanged="OnTitleModeChanged">
+                            <ComboBoxItem Content="Last command" />
+                            <ComboBoxItem Content="Working directory" />
+                        </ComboBox>
+                    </Grid>
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Show details" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Second line on session cards (path or shell name)." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <ToggleSwitch x:Name="ShowPathToggle" Grid.Column="1" MinWidth="0"
+                                      OnContent="" OffContent="" Margin="0,-4,-32,-8"
+                                      VerticalAlignment="Center" Toggled="OnShowPathToggled" />
+                    </Grid>
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Tab search" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Search box above the session list; off shows a Sessions label." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <ToggleSwitch x:Name="ShowSearchToggle" Grid.Column="1" MinWidth="0"
+                                      OnContent="" OffContent="" Margin="0,-4,-32,-8"
+                                      VerticalAlignment="Center" Toggled="OnShowSearchToggled" />
+                    </Grid>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                    <TextBlock Text="Text" Style="{StaticResource SectionHeader}" />
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Font family" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Monospace fonts work best. Applies live." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <ComboBox x:Name="FontFamilyCombo" FontSize="13" Grid.Column="1" Width="220"
+                                  VerticalAlignment="Center" SelectionChanged="OnFontFamilyChanged">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Name}" FontFamily="{Binding Family}"
+                                               FontSize="13" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </Grid>
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Font size" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Ctrl+wheel zooms a single session temporarily." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <NumberBox x:Name="FontSizeBox" FontSize="13" Grid.Column="1" Width="130"
+                                   Minimum="7" Maximum="36" SmallChange="1"
+                                   SpinButtonPlacementMode="Inline"
+                                   VerticalAlignment="Center" ValueChanged="OnFontSizeChanged" />
+                    </Grid>
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Cursor style" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Used unless an application picks its own. Applies live." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <ComboBox x:Name="CursorStyleCombo" FontSize="13" Grid.Column="1" Width="160"
+                                  VerticalAlignment="Center" SelectionChanged="OnCursorStyleChanged">
+                            <ComboBoxItem>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <TextBlock Text="▮" FontFamily="Cascadia Mono" FontSize="13" />
+                                    <TextBlock Text="Block" FontSize="13" />
+                                </StackPanel>
+                            </ComboBoxItem>
+                            <ComboBoxItem>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <TextBlock Text="▁" FontFamily="Cascadia Mono" FontSize="13" />
+                                    <TextBlock Text="Underline" FontSize="13" />
+                                </StackPanel>
+                            </ComboBoxItem>
+                            <ComboBoxItem>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <TextBlock Text="▏" FontFamily="Cascadia Mono" FontSize="13" />
+                                    <TextBlock Text="Bar" FontSize="13" />
+                                </StackPanel>
+                            </ComboBoxItem>
+                        </ComboBox>
+                    </Grid>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                    <TextBlock Text="Input position" Style="{StaticResource SectionHeader}" />
+                    <TextBlock Text="Where the prompt sits. Applies live; full-screen apps are unaffected."
+                               Style="{StaticResource SettingDescription}" Margin="0,0,0,6" />
+
+                    <GridView x:Name="InputPositionGrid" SelectionMode="Single" IsItemClickEnabled="False"
+                              SelectionChanged="OnInputPositionChanged" HorizontalAlignment="Left"
+                              ScrollViewer.VerticalScrollMode="Disabled"
+                              ScrollViewer.HorizontalScrollMode="Disabled">
+                        <GridView.ItemContainerTransitions>
+                            <TransitionCollection />
+                        </GridView.ItemContainerTransitions>
+
+                        <GridViewItem>
+                            <StackPanel Spacing="4" Padding="4">
+                                <Border Width="104" Height="58" CornerRadius="6"
+                                        Background="{ThemeResource IconChipBrush}"
+                                        BorderBrush="#40808080" BorderThickness="1" Padding="10,9">
+                                    <StackPanel Spacing="5" VerticalAlignment="Top">
+                                        <Rectangle Height="4" Width="42" HorizontalAlignment="Left"
+                                                   RadiusX="2" RadiusY="2" Fill="{ThemeResource BarIconBrush}" />
+                                        <Rectangle Height="4" Width="66" HorizontalAlignment="Left"
+                                                   RadiusX="2" RadiusY="2" Fill="{ThemeResource SubtleIconBrush}" Opacity="0.55" />
+                                        <Rectangle Height="4" Width="54" HorizontalAlignment="Left"
+                                                   RadiusX="2" RadiusY="2" Fill="{ThemeResource SubtleIconBrush}" Opacity="0.55" />
+                                    </StackPanel>
+                                </Border>
+                                <TextBlock Text="Classic" FontSize="11" HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </GridViewItem>
+
+                        <GridViewItem>
+                            <StackPanel Spacing="4" Padding="4">
+                                <Border Width="104" Height="58" CornerRadius="6"
+                                        Background="{ThemeResource IconChipBrush}"
+                                        BorderBrush="#40808080" BorderThickness="1" Padding="10,9">
+                                    <StackPanel Spacing="5" VerticalAlignment="Bottom">
+                                        <Rectangle Height="4" Width="66" HorizontalAlignment="Left"
+                                                   RadiusX="2" RadiusY="2" Fill="{ThemeResource SubtleIconBrush}" Opacity="0.55" />
+                                        <Rectangle Height="4" Width="54" HorizontalAlignment="Left"
+                                                   RadiusX="2" RadiusY="2" Fill="{ThemeResource SubtleIconBrush}" Opacity="0.55" />
+                                        <Rectangle Height="4" Width="42" HorizontalAlignment="Left"
+                                                   RadiusX="2" RadiusY="2" Fill="{ThemeResource BarIconBrush}" />
+                                    </StackPanel>
+                                </Border>
+                                <TextBlock Text="Pinned bottom" FontSize="11" HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </GridViewItem>
+
+                        <GridViewItem>
+                            <StackPanel Spacing="4" Padding="4">
+                                <Border Width="104" Height="58" CornerRadius="6"
+                                        Background="{ThemeResource IconChipBrush}"
+                                        BorderBrush="#40808080" BorderThickness="1" Padding="10,9">
+                                    <StackPanel Spacing="5" VerticalAlignment="Top">
+                                        <Rectangle Height="4" Width="42" HorizontalAlignment="Left"
+                                                   RadiusX="2" RadiusY="2" Fill="{ThemeResource BarIconBrush}" />
+                                        <Rectangle Height="1" HorizontalAlignment="Stretch" Margin="-4,2"
+                                                   Fill="{ThemeResource SectionDividerBrush}" />
+                                        <Rectangle Height="4" Width="66" HorizontalAlignment="Left"
+                                                   RadiusX="2" RadiusY="2" Fill="{ThemeResource SubtleIconBrush}" Opacity="0.55" />
+                                        <Rectangle Height="4" Width="54" HorizontalAlignment="Left"
+                                                   RadiusX="2" RadiusY="2" Fill="{ThemeResource SubtleIconBrush}" Opacity="0.55" />
+                                    </StackPanel>
+                                </Border>
+                                <TextBlock Text="Pinned top" FontSize="11" HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </GridViewItem>
+                    </GridView>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                </StackPanel>
+
+                <!-- ============ Terminal ============ -->
+                <StackPanel x:Name="TerminalPage" MaxWidth="720" Visibility="Collapsed">
+                    <TextBlock Text="History" Style="{StaticResource FirstSectionHeader}" />
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Scrollback lines" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="History kept per session. Applies to new sessions." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <NumberBox x:Name="ScrollbackBox" FontSize="13" Grid.Column="1" Width="160"
+                                   Minimum="100" Maximum="200000" SmallChange="1000"
+                                   SpinButtonPlacementMode="Inline"
+                                   VerticalAlignment="Center" ValueChanged="OnScrollbackChanged" />
+                    </Grid>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                </StackPanel>
+
+                <!-- ============ Shell ============ -->
+                <StackPanel x:Name="ShellPage" MaxWidth="720" Visibility="Collapsed">
+                    <TextBlock Text="Shell" Style="{StaticResource FirstSectionHeader}" />
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Default shell" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Zharp reports the current directory for all of these. Applies to new sessions." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <ComboBox x:Name="ShellCombo" FontSize="13" Grid.Column="1" Width="200"
+                                  VerticalAlignment="Center" SelectionChanged="OnShellChanged">
+                            <ComboBoxItem Content="Auto (prefer PowerShell 7)" />
+                            <ComboBoxItem x:Name="PwshItem" Content="PowerShell 7" />
+                            <ComboBoxItem Content="Windows PowerShell" />
+                            <ComboBoxItem Content="Command Prompt" />
+                        </ComboBox>
+                    </Grid>
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Default directory" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Where new terminals start. Leave empty for your user folder." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBox x:Name="DefaultDirBox" FontSize="13" Width="200"
+                                     PlaceholderText="~" TextChanged="OnDefaultDirChanged" />
+                            <Button FontSize="13" Padding="10,4" VerticalAlignment="Center"
+                                    Content="Browse" Click="OnBrowseDefaultDir" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                    <TextBlock Text="Startup" Style="{StaticResource SectionHeader}" />
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Continue where you left off" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Reopen the tabs you had open when you quit - same shells, same folders." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <ToggleSwitch x:Name="RestoreSessionsToggle" Grid.Column="1" MinWidth="0"
+                                      OnContent="" OffContent="" Margin="0,-4,-32,-8"
+                                      VerticalAlignment="Center" Toggled="OnRestoreSessionsToggled" />
+                    </Grid>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                    <TextBlock Text="Colors" Style="{StaticResource SectionHeader}" />
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Shell colors" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Remove NO_COLOR from the environment of spawned shells so tools emit ANSI colors. Applies to new sessions." Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <ToggleSwitch x:Name="NoColorToggle" Grid.Column="1" MinWidth="0"
+                                      OnContent="" OffContent="" Margin="0,-4,-32,-8"
+                                      VerticalAlignment="Center" Toggled="OnNoColorToggled" />
+                    </Grid>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                </StackPanel>
+
+                <!-- ============ Shortcuts ============ -->
+                <StackPanel x:Name="ShortcutsPage" MaxWidth="720" Visibility="Collapsed">
+                    <TextBlock Text="Keyboard shortcuts" Style="{StaticResource FirstSectionHeader}" />
+                    <TextBlock Text="Click a shortcut, then press the new key combination. Esc cancels. Shortcuts must include Ctrl or Alt."
+                               Style="{StaticResource SettingDescription}" Margin="0,0,0,6" />
+                    <StackPanel x:Name="ShortcutsPanel" />
+                    <TextBlock x:Name="ShortcutHint" Style="{StaticResource SettingDescription}"
+                               Foreground="#D97757" Margin="0,6,0,0" />
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                </StackPanel>
+
+                <!-- ============ About ============ -->
+                <StackPanel x:Name="AboutPage" MaxWidth="720" Visibility="Collapsed">
+                    <TextBlock Text="About" Style="{StaticResource FirstSectionHeader}" />
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Image Source="{ThemeResource ZharpLogoImage}" Width="52" Height="52"
+                               VerticalAlignment="Top" />
+                        <StackPanel Grid.Column="1" Spacing="4">
+                            <TextBlock Text="Zharp" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock x:Name="AboutVersion" Text="Version" Style="{StaticResource SettingDescription}" />
+                            <TextBlock Text="A fast, modern terminal for Windows - WinUI 3, Win2D GPU rendering, ConPTY, and a custom VT emulator."
+                                       Style="{StaticResource SettingDescription}" Margin="0,4,0,0" />
+                            <TextBlock Text="Icons: Tabler Icons (MIT) - tabler.io/icons"
+                                       Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                    <TextBlock Text="Updates" Style="{StaticResource SectionHeader}" />
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Check for updates" Style="{StaticResource SettingTitle}" />
+                            <TextBlock x:Name="UpdateStatus" Text="Zharp 0.1.0"
+                                       Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <Button x:Name="UpdateButton" Grid.Column="1" Content="Check now" FontSize="13"
+                                VerticalAlignment="Center" Click="OnCheckUpdates" />
+                    </Grid>
+
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                    <TextBlock Text="Configuration" Style="{StaticResource SectionHeader}" />
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Settings file" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="settings.json in %LOCALAPPDATA%\Zharp" Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="Open folder" VerticalAlignment="Center"
+                                Click="OnOpenSettingsFolder" />
+                    </Grid>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

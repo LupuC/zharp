@@ -1,0 +1,136 @@
+{
+  "_readme": [
+    "Canonical Zharp color palettes. This file is data, not code, and no app reads",
+    "it at runtime: each platform hard-codes the same values in its own source.",
+    "Editing this file alone changes nothing that ships. Update the embedded copies",
+    "too, then run scripts/check-shared-drift.sh, which fails when they disagree.",
+    "Embedded copies: macos/Sources/ZharpCore/Terminal/Palette.swift and",
+    "windows/src/Zharp.Core/Terminal/Palette.cs."
+  ],
+  "version": 1,
+  "colorFormat": "RRGGBB, uppercase hex, no leading '#' and no leading '0x'.",
+  "indexedPalette": {
+    "_note": "Entries 0-15 come from each theme's ansi16. Entries 16-255 are generated and are identical for every theme.",
+    "cube": {
+      "firstIndex": 16,
+      "steps": [0, 95, 135, 175, 215, 255],
+      "formula": "index = 16 + r*36 + g*6 + b, color = (steps[r] << 16) | (steps[g] << 8) | steps[b], for r, g, b each 0-5"
+    },
+    "grayscaleRamp": {
+      "firstIndex": 232,
+      "count": 24,
+      "formula": "index = 232 + i, v = 8 + i*10, color = (v << 16) | (v << 8) | v, for i 0-23"
+    }
+  },
+  "sharedAnsi16": {
+    "_note": "Named 16-color sets that more than one theme uses. A theme referring to one carries 'ansi16Ref' instead of its own 'ansi16'.",
+    "gitHubLight": [
+      "24292F", "CF222E", "116329", "7D4E00", "0969DA", "8250DF", "1B7C8C", "6E7781",
+      "57606A", "A40E26", "1A7F37", "633C01", "218BFF", "A475F9", "3192AA", "8C959F"
+    ]
+  },
+  "themes": [
+    {
+      "id": "campbell",
+      "description": "Campbell ANSI colors on a soft dark-grey surface (not pure black), with a blue accent cursor.",
+      "foreground": "CFCFCF",
+      "background": "282828",
+      "cursor": "7AA2F7",
+      "selection": "FFFFFF",
+      "ansi16": [
+        "0C0C0C", "C50F1F", "13A10E", "C19C00", "0037DA", "881798", "3A96DD", "CCCCCC",
+        "767676", "E74856", "16C60C", "F9F1A5", "3B78FF", "B4009E", "61D6D6", "F2F2F2"
+      ]
+    },
+    {
+      "id": "cream",
+      "description": "A warm light scheme built around Zharp's logo color: charcoal text on a cream surface, ANSI colors tuned for light backgrounds.",
+      "foreground": "23262D",
+      "background": "EDE6D8",
+      "cursor": "3B5BDB",
+      "selection": "33415C",
+      "ansi16Ref": "gitHubLight"
+    },
+    {
+      "id": "paper",
+      "description": "Clean neutral light scheme.",
+      "foreground": "24292F",
+      "background": "F6F5F1",
+      "cursor": "0969DA",
+      "selection": "0969DA",
+      "ansi16Ref": "gitHubLight"
+    },
+    {
+      "id": "rose",
+      "description": "Warm light scheme after Rose Pine Dawn.",
+      "foreground": "575279",
+      "background": "FAF4ED",
+      "cursor": "B4637A",
+      "selection": "907AA9",
+      "ansi16": [
+        "F2E9E1", "B4637A", "286983", "EA9D34", "56949F", "907AA9", "D7827E", "575279",
+        "9893A5", "B4637A", "286983", "EA9D34", "56949F", "907AA9", "D7827E", "575279"
+      ]
+    },
+    {
+      "id": "navy",
+      "description": "Deep blue dark scheme (the logo's navy), Nord-flavored ANSI.",
+      "foreground": "C7D1E8",
+      "background": "151E32",
+      "cursor": "6E9BFF",
+      "selection": "FFFFFF",
+      "ansi16": [
+        "1C2540", "BF616A", "A3BE8C", "EBCB8B", "81A1C1", "B48EAD", "88C0D0", "D8DEE9",
+        "4C566A", "D07079", "B1CC97", "F0D399", "8FB0D3", "C29DBF", "93CEDE", "ECEFF4"
+      ]
+    },
+    {
+      "id": "tokyo",
+      "description": "Indigo dark scheme after Tokyo Night.",
+      "foreground": "C0CAF5",
+      "background": "1A1B26",
+      "cursor": "7AA2F7",
+      "selection": "FFFFFF",
+      "ansi16": [
+        "15161E", "F7768E", "9ECE6A", "E0AF68", "7AA2F7", "BB9AF7", "7DCFFF", "A9B1D6",
+        "414868", "F7768E", "9ECE6A", "E0AF68", "7AA2F7", "BB9AF7", "7DCFFF", "C0CAF5"
+      ]
+    },
+    {
+      "id": "dracula",
+      "description": "Purple-tinted dark scheme (draculatheme.com spec).",
+      "foreground": "F8F8F2",
+      "background": "282A36",
+      "cursor": "BD93F9",
+      "selection": "FFFFFF",
+      "ansi16": [
+        "21222C", "FF5555", "50FA7B", "F1FA8C", "BD93F9", "FF79C6", "8BE9FD", "F8F8F2",
+        "6272A4", "FF6E6E", "69FF94", "FFFFA5", "D6ACFF", "FF92DF", "A4FFFF", "FFFFFF"
+      ]
+    },
+    {
+      "id": "catppuccin",
+      "description": "Soft pastel dark scheme (Mocha flavor).",
+      "foreground": "CDD6F4",
+      "background": "1E1E2E",
+      "cursor": "F5E0DC",
+      "selection": "FFFFFF",
+      "ansi16": [
+        "45475A", "F38BA8", "A6E3A1", "F9E2AF", "89B4FA", "F5C2E7", "94E2D5", "BAC2DE",
+        "585B70", "F38BA8", "A6E3A1", "F9E2AF", "89B4FA", "F5C2E7", "94E2D5", "CDD6F4"
+      ]
+    },
+    {
+      "id": "gruvbox",
+      "description": "Warm retro dark scheme (hard-contrast background).",
+      "foreground": "EBDBB2",
+      "background": "1D2021",
+      "cursor": "FE8019",
+      "selection": "FFFFFF",
+      "ansi16": [
+        "282828", "CC241D", "98971A", "D79921", "458588", "B16286", "689D6A", "A89984",
+        "928374", "FB4934", "B8BB26", "FABD2F", "83A598", "D3869B", "8EC07C", "EBDBB2"
+      ]
+    }
+  ]
+}

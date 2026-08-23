@@ -1,0 +1,52 @@
+name: Release Please
+
+# Keeps one release pull request open, built from the conventional commits on
+# main. Merging it does all four of these in a single commit:
+#
+#   1. bumps version.txt, windows/version.txt and macos/version.txt,
+#   2. bumps the version inside windows/Directory.Build.props,
+#      windows/installer/zharp.iss and macos/Sources/ZharpApp/App.swift,
+#   3. writes the entry into the root CHANGELOG.md,
+#   4. tags vX.Y.Z and publishes one GitHub release.
+#
+# That single release then triggers release.yml, which builds Windows and
+# macOS on their own runners and attaches every artifact to it.
+#
+# How the one-version rule is enforced (release-please-config.json):
+#   - the "." package owns the tag, the release and the changelog. It has
+#     include-component-in-tag: false, so the tag is v0.15.0 and not
+#     zharp-v0.15.0, and it sees every commit in the repo.
+#   - "windows" and "macos" are components. They only exist so their own
+#     version files get rewritten. Both set skip-github-release: true, so
+#     they never create a windows-v0.15.0 / macos-v0.15.0 tag of their own,
+#     and skip-changelog: true, so there is no second changelog per platform.
+#   - the linked-versions plugin ties those two components together: whichever
+#     one would bump highest sets the version, and the other is dragged to the
+#     same number even when nothing under its directory changed.
+#
+# Never edit a version by hand. release.yml refuses to build if a platform's
+# version.txt disagrees with the release tag.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          # A PAT (RELEASE_PLEASE_TOKEN) makes the whole chain hands-off:
+          # pull requests opened with the default bot token need a maintainer
+          # to approve their workflow runs, and a release published with the
+          # bot token does not fire the `release` event that release.yml waits
+          # on. Without the secret everything still works, but you have to run
+          # release.yml manually afterwards with the tag as input.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
