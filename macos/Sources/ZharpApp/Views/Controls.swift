@@ -163,6 +163,128 @@ final class IconButton: NSView {
     }
 }
 
+/// An icon button that can carry a short label beside its glyph, so its width
+/// follows its content instead of being pinned square. Everything else (the
+/// hover backplate, the corner radius, the tint) is `IconButton`'s.
+///
+/// The label sits BEFORE the glyph: it grows from "+9" to "+1204" as you work,
+/// and putting it after would walk the icon along the title bar while you were
+/// looking at it.
+final class ChipButton: NSView {
+    private var glyph: String
+    private var glyphSize: CGFloat
+    private var side: CGFloat
+    private var hovering = false
+    private var pressed = false
+    private var trackingAreaRef: NSTrackingArea?
+
+    var onClick: (() -> Void)?
+    var tint: NSColor?
+    var cornerRadius: CGFloat = 5
+
+    /// Attributed rather than plain because the counts are two-tone: a green
+    /// `+n` next to a red `-n`, in the terminal palette's own colours.
+    var label: NSAttributedString? {
+        didSet {
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        }
+    }
+
+    override var isFlipped: Bool { true }
+
+    init(glyph: String, glyphSize: CGFloat = 18, side: CGFloat = 28) {
+        self.glyph = glyph
+        self.glyphSize = glyphSize
+        self.side = side
+        super.init(frame: NSRect(x: 0, y: 0, width: side, height: side))
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: side).isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("not supported") }
+
+    /// Resizes the button and its glyph for the current chrome zoom.
+    func setMetrics(side: CGFloat, glyphSize: CGFloat) {
+        self.side = side
+        self.glyphSize = glyphSize
+        for constraint in constraints where constraint.firstAttribute == .height {
+            constraint.constant = side
+        }
+        invalidateIntrinsicContentSize()
+        needsDisplay = true
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: max(side, contentWidth() + leadPadding + trailPadding), height: side)
+    }
+
+    /// Matches the Windows chip's 6,0,8,0 padding: a little more room on the
+    /// glyph's side so it is not crowded against the next control.
+    private var leadPadding: CGFloat { 6 * side / 28 }
+    private var trailPadding: CGFloat { 8 * side / 28 }
+    private var labelGap: CGFloat { 6 * side / 28 }
+
+    private func glyphText() -> NSAttributedString {
+        NSAttributedString(string: glyph, attributes: [
+            .font: Icons.font(size: glyphSize),
+            .foregroundColor: tint ?? Chrome.current.barIcon,
+        ])
+    }
+
+    private func contentWidth() -> CGFloat {
+        let glyphWidth = glyphText().size().width
+        guard let label, label.length > 0 else { return glyphWidth }
+        return label.size().width + labelGap + glyphWidth
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingAreaRef { removeTrackingArea(trackingAreaRef) }
+        let area = NSTrackingArea(rect: bounds,
+                                  options: [.mouseEnteredAndExited, .activeInKeyWindow],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingAreaRef = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovering = false; pressed = false; needsDisplay = true }
+    override func mouseDown(with event: NSEvent) { pressed = true; needsDisplay = true }
+
+    override func mouseUp(with event: NSEvent) {
+        let wasPressed = pressed
+        pressed = false
+        needsDisplay = true
+        if wasPressed && bounds.contains(convert(event.locationInWindow, from: nil)) {
+            onClick?()
+        }
+    }
+
+    func refreshChrome() {
+        invalidateIntrinsicContentSize()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if hovering || pressed {
+            let backplate = pressed ? Chrome.current.rowSelected : Chrome.current.rowHover
+            backplate.setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: cornerRadius, yRadius: cornerRadius).fill()
+        }
+
+        var x = (bounds.width - contentWidth()) / 2
+        if let label, label.length > 0 {
+            let size = label.size()
+            label.draw(at: NSPoint(x: x, y: (bounds.height - size.height) / 2))
+            x += size.width + labelGap
+        }
+        let text = glyphText()
+        let size = text.size()
+        text.draw(at: NSPoint(x: x, y: (bounds.height - size.height) / 2))
+    }
+}
+
 /// Single-line text that fades out on overflow instead of being trimmed with an
 /// ellipsis. `tailFirst` picks which end survives: the TAIL for paths (fade the
 /// left edge in), the HEAD for commands and status lines (fade the right edge

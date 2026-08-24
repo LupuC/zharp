@@ -17,6 +17,9 @@ enum Icons {
     static let keyboard   = "\u{EBD6}" // keyboard
     static let info       = "\u{EAC5}" // info-circle
     static let check      = "\u{EA67}" // check
+    static let copy       = "\u{EA7A}" // copy
+    static let fileDiff   = "\u{ECF1}" // file-diff
+    static let refresh    = "\u{EB13}" // refresh
     static let powershell = "\u{F5ED}" // brand-powershell
     static let git        = "\u{EF6F}" // brand-git
     static let ubuntu     = "\u{EF59}" // brand-ubuntu
