@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.2](https://github.com/LupuC/zharp/compare/macos-v0.19.1...macos-v0.19.2) (2026-08-24)
+
+
+### Performance
+
+* **macos:** build a universal binary so Apple Silicon runs natively ([#19](https://github.com/LupuC/zharp/issues/19)) ([189f7fe](https://github.com/LupuC/zharp/commit/189f7fec14f592a39055d30d782b2e0c3a0d1c4e))
+
 ## [0.19.1](https://github.com/LupuC/zharp/compare/macos-v0.19.0...macos-v0.19.1) (2026-08-24)
 
 
