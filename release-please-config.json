@@ -12,14 +12,9 @@
     { "type": "chore", "section": "Chores", "hidden": true }
   ],
   "packages": {
-    ".": {
-      "include-component-in-tag": false
-    },
     "windows": {
       "component": "windows",
       "include-component-in-tag": true,
-      "skip-github-release": true,
-      "skip-changelog": true,
       "extra-files": [
         {
           "type": "xml",
@@ -35,8 +30,6 @@
     "macos": {
       "component": "macos",
       "include-component-in-tag": true,
-      "skip-github-release": true,
-      "skip-changelog": true,
       "extra-files": [
         {
           "type": "generic",
@@ -44,12 +37,5 @@
         }
       ]
     }
-  },
-  "plugins": [
-    {
-      "type": "linked-versions",
-      "groupName": "zharp",
-      "components": ["windows", "macos"]
-    }
-  ]
+  }
 }

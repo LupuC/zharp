@@ -1,31 +1,44 @@
 name: Release Please
 
 # Keeps one release pull request open, built from the conventional commits on
-# main. Merging it does all four of these in a single commit:
+# main. It covers whichever platforms have unreleased commits under them, and
+# merging it bumps each of those, tags them and publishes their releases.
 #
-#   1. bumps version.txt, windows/version.txt and macos/version.txt,
-#   2. bumps the version inside windows/Directory.Build.props,
-#      windows/installer/zharp.iss and macos/Sources/ZharpApp/App.swift,
-#   3. writes the entry into the root CHANGELOG.md,
-#   4. tags vX.Y.Z and publishes one GitHub release.
+# THE VERSION MODEL
 #
-# That single release then triggers release.yml, which builds Windows and
-# macOS on their own runners and attaches every artifact to it.
+#   0.16   the LINE. Every platform is on it. It moves when a feature ships,
+#          and it moves for all platforms together.
+#   .2     the PATCH. It belongs to one platform's own bug fixes. Windows can
+#          sit on 0.16.2 while macOS is still on 0.16.0, because macOS had
+#          nothing to fix and so was never rebuilt.
 #
-# How the one-version rule is enforced (release-please-config.json):
-#   - the "." package owns the tag, the release and the changelog. It has
-#     include-component-in-tag: false, so the tag is v0.16.0 and not
-#     zharp-v0.16.0, and it sees every commit in the repo.
-#   - "windows" and "macos" are components. They only exist so their own
-#     version files get rewritten. Both set skip-github-release: true, so
-#     they never create a windows-v0.16.0 / macos-v0.16.0 tag of their own,
-#     and skip-changelog: true, so there is no second changelog per platform.
-#   - the linked-versions plugin ties those two components together: whichever
-#     one would bump highest sets the version, and the other is dragged to the
-#     same number even when nothing under its directory changed.
+# release-please assigns each commit to a component by the path it touches, so
+# a `fix:` under windows/ bumps only windows. That is what gives you the patch
+# half. There is no setting that gives you the line half: linked-versions syncs
+# the whole version including the patch, which is what this repository did
+# before and is exactly the rebuild we are avoiding.
 #
-# Never edit a version by hand. release.yml refuses to build if a platform's
-# version.txt disagrees with the release tag.
+# So the line is enforced outside release-please, by .github/workflows/
+# version-line.yml, which fails any pull request whose platforms disagree on
+# major.minor. Read the comment at the top of that file before changing this
+# one: without it, a `feat:` touching only macos/ bumps macOS to 0.17.0 and
+# leaves Windows behind, which is the drift the monorepo exists to prevent.
+#
+# WHAT MERGING THE RELEASE PR DOES, per platform that moved:
+#
+#   1. bumps <platform>/version.txt,
+#   2. bumps the version inside the files that embed it:
+#      windows/Directory.Build.props and windows/installer/zharp.iss,
+#      macos/Sources/ZharpApp/App.swift,
+#   3. writes the entry into <platform>/CHANGELOG.md,
+#   4. tags <platform>-vX.Y.Z and publishes that platform's GitHub release.
+#
+# Each release then triggers release.yml, which reads the platform off the tag
+# and builds only that one.
+#
+# Never edit a version by hand. release.yml refuses to build when a platform's
+# version.txt disagrees with the tag, and version-line.yml refuses to merge a
+# pull request that puts the platforms on different lines.
 
 on:
   push:

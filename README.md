@@ -8,8 +8,12 @@ It is native on each platform: C# and WinUI 3 on Windows, Swift and AppKit on
 macOS, with a shared terminal engine ported line for line between them so the
 two behave the same. There is no web view and no bundled browser.
 
-Both apps are at **0.16.0**. This is beta software: it is used daily, but the
-1.0 label is not on it yet.
+Both apps are on the **0.16** line. This is beta software: it is used daily,
+but the 1.0 label is not on it yet.
+
+Every platform shares the line. The third number is that platform's own bug
+fixes, so Windows can be on 0.16.2 while macOS is still on 0.16.0: macOS had
+nothing to fix, so it was never rebuilt. A new line ships everywhere at once.
 
 ## Features
 
@@ -56,25 +60,30 @@ answer is in [docs/parity.md](docs/parity.md).
 
 ## Platform support
 
-| Platform | Status | Version | Requirements |
+| Platform | Status | Line | Requirements |
 |---|---|---|---|
-| Windows | Working | 0.16.0 | Windows 10 version 2004 (build 19041) or newer, 64-bit |
-| macOS | Working | 0.16.0 | macOS 13 Ventura or newer |
+| Windows | Working | 0.16 | Windows 10 version 2004 (build 19041) or newer, 64-bit |
+| macOS | Working | 0.16 | macOS 13 Ventura or newer |
 | Linux | Planned, no code yet | none | The toolkit has not been chosen |
 
 ## Install
 
 Every download below comes from the GitHub releases page:
 
-<https://github.com/LupuC/zharp/releases/latest>
+<https://github.com/LupuC/zharp/releases>
+
+Releases are tagged per platform, `windows-v0.16.2` and `macos-v0.16.0`, so
+take the newest one carrying the installer you want. Do not use
+`/releases/latest`: it points at whichever platform released most recently and
+will hand you the wrong one about half the time.
 
 ### Windows
 
 1. Check your Windows version: press `Win+R`, type `winver`, press Enter. The box
    must say version 2004 or higher, or a build number of 19041 or higher.
-2. Download `ZharpSetup.exe` from the releases page above. That file always
-   points at the newest build. The version stamped file
-   (`ZharpSetup-0.16.0.exe`) is next to it if you want a specific one.
+2. Open the newest `windows-v*` release and download `ZharpSetup.exe`. The
+   version stamped file (`ZharpSetup-0.16.2.exe`) is next to it if you want to
+   keep track of which build you took.
 3. Run it. The installer is not code signed yet, so Windows SmartScreen shows a
    blue box that says **"Windows protected your PC"**. Click **More info**, then
    click **Run anyway**. There is no other button that installs it.
@@ -99,7 +108,7 @@ Requirements: macOS 13 Ventura or newer. Check with the Apple menu, then
 through Rosetta 2; if Rosetta is not installed, macOS offers to install it the
 first time you open the app, and you should accept.
 
-1. Download `Zharp.dmg` from the releases page above.
+1. Open the newest `macos-v*` release and download `Zharp.dmg`.
 2. Open the `.dmg` and drag **Zharp** into your **Applications** folder.
 3. Eject the disk image and open Zharp from Applications.
 
