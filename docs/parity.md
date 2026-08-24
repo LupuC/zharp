@@ -10,12 +10,18 @@ Keeping it accurate is part of shipping a feature: **any pull request that adds,
 removes or changes a user facing feature updates the relevant row here in the
 same PR.** A row that is wrong is treated as a bug.
 
-Current as of 0.16.0 on Windows and macOS. Linux has no code yet, so its column
+Current as of 0.18 on Windows and macOS. Linux has no code yet, so its column
 is "Not yet" everywhere; it is here so the size of the port is visible.
 
 Legend: **Yes** means shipped and usable. **Partial** means it exists but is
 narrower than on the other platform, and the Notes column says how. **Not yet**
 means it is not implemented.
+
+> Every row below was checked against the source on 24 August 2026, because the
+> previous version of this file was badly wrong: it listed nineteen features as
+> macOS only that Windows has had all along, including command blocks, the
+> history panel, tab tear-out and the AI agent status. Do not trust a row here
+> without a commit that changed the code behind it.
 
 ## Terminal engine
 
@@ -30,9 +36,9 @@ means it is not implemented.
 | Bracketed paste, application cursor keys, focus events, device status reports | Yes | Yes | Not yet | |
 | 10,000 lines of scrollback per tab | Yes | Yes | Not yet | Configurable with `scrollbackLines` |
 | Correct UTF-8 across read boundaries | Yes | Yes | Not yet | |
-| Text reflow on resize | Not yet | Not yet | Not yet | Roadmap on both |
-| Search in scrollback | Not yet | Not yet | Not yet | Block search exists on macOS, see below |
-| Mouse reporting to applications (SGR 1006) | Not yet | Not yet | Not yet | Roadmap on both |
+| Text reflow on resize | Not yet | Not yet | Not yet | Both match classic conhost and do not reflow |
+| Search in scrollback | Not yet | Not yet | Not yet | Searching inside one block exists on both, see below |
+| Mouse reporting to applications (SGR 1006) | Not yet | Not yet | Not yet | The sequence is accepted and ignored on both |
 | OSC 8 hyperlinks, OSC 52 clipboard | Not yet | Not yet | Not yet | Roadmap on both |
 | Sixel and iTerm image protocols | Not yet | Not yet | Not yet | Roadmap on both |
 
@@ -42,20 +48,20 @@ means it is not implemented.
 |---|---|---|---|---|
 | GPU composited text rendering | Yes | Yes | Not yet | Win2D and DirectWrite on Windows, Core Text on layer-backed views on macOS |
 | Crisp at any DPI or scale factor | Yes | Yes | Not yet | |
-| Geometric box drawing and block elements | Not yet | Yes | Not yet | macOS draws these shapes itself so TUI borders join seamlessly in any font |
+| Geometric box drawing and block elements | Not yet | Yes | Not yet | macOS draws U+2500–U+259F itself so TUI borders join seamlessly in any font. Windows renders them as font glyphs |
 | Ligatures and font fallback tuning | Not yet | Not yet | Not yet | Roadmap on both |
 
 ## Command blocks and history
 
 | Feature | Windows | macOS | Linux | Notes |
 |---|---|---|---|---|
-| Command and output grouped into addressable blocks | Not yet | Yes | Not yet | |
-| Jump to previous / next block | Not yet | Yes | Not yet | |
-| Collapse a block to one line | Not yet | Yes | Not yet | |
-| Copy command, output, whole block, or Markdown fenced block | Not yet | Yes | Not yet | |
-| Search within a single block, match case and regex | Not yet | Yes | Not yet | |
-| Command history panel on Arrow Up | Not yet | Yes | Not yet | Cross shell and cross session, with folder and age per entry |
-| Highlighted history entry typed at the prompt live | Not yet | Yes | Not yet | |
+| Command and output grouped into addressable blocks | Yes | Yes | Not yet | |
+| Jump to previous / next block | Yes | Yes | Not yet | `blockPrev` and `blockNext`, `Ctrl+Up` and `Ctrl+Down` by default |
+| Collapse a block to one line | Yes | Yes | Not yet | |
+| Copy command, output, whole block, or Markdown fenced block | Yes | Yes | Not yet | |
+| Search within a single block, match case and regex | Yes | Yes | Not yet | `findInBlock` |
+| Command history panel on Arrow Up | Yes | Yes | Not yet | Cross shell and cross session, with folder and age per entry |
+| Highlighted history entry typed at the prompt live | Yes | Yes | Not yet | Enter runs what is already typed rather than sending the text again |
 
 ## Tabs and windows
 
@@ -63,13 +69,13 @@ means it is not implemented.
 |---|---|---|---|---|
 | Sessions in a sidebar or a compact top strip | Yes | Yes | Not yet | `tabLayout` |
 | Live working directory on the tab card | Yes | Yes | Not yet | |
-| Last command run shown on the tab card | Not yet | Yes | Not yet | |
-| AI agent logo and live status on the tab card | Not yet | Yes | Not yet | Detects Claude Code, Codex, Gemini CLI, OpenCode, Aider |
-| Drag a tab to reorder it | Not yet | Yes | Not yet | |
-| Drag a tab onto another window to hand it over, shell still running | Not yet | Yes | Not yet | |
-| Tear a tab out into a window of its own | Not yet | Yes | Not yet | |
-| Multiple windows | Not yet | Yes | Not yet | |
-| Reopen the tabs from the last run | Not yet | Yes | Not yet | `restoreSessions` |
+| Last command run shown on the tab card | Yes | Yes | Not yet | |
+| AI agent logo and live status on the tab card | Yes | Yes | Not yet | Detects Claude Code, Codex, Gemini CLI, OpenCode, Aider |
+| Drag a tab to reorder it | Yes | Yes | Not yet | |
+| Drag a tab onto another window to hand it over, shell still running | Yes | Yes | Not yet | |
+| Tear a tab out into a window of its own | Yes | Yes | Not yet | |
+| Multiple windows | Yes | Yes | Not yet | |
+| Reopen the tabs from the last run | Yes | Yes | Not yet | `restoreSessions` |
 | New tab menu with detected shells | Yes | Yes | Not yet | PowerShell 7, Windows PowerShell, cmd, Git Bash, WSL on Windows; zsh, bash, fish, pwsh, sh on macOS |
 | New tab at the last closed tab's directory | Yes | Yes | Not yet | |
 | Floating session search palette | Yes | Yes | Not yet | |
@@ -80,8 +86,8 @@ means it is not implemented.
 | Feature | Windows | macOS | Linux | Notes |
 |---|---|---|---|---|
 | Working directory reporting (OSC 7) | Yes | Yes | Not yet | Windows also parses OSC 9;9, the ConEmu convention |
-| Auto-injected prompt hook, no rc file editing | Partial | Yes | Not yet | Windows hooks the PowerShell `prompt` function only; macOS hooks zsh, bash, fish and pwsh |
-| Prompt and command marks (OSC 133) | Not yet | Partial | Not yet | macOS emits and consumes OSC 133;A, which is what blocks are built on; the rest of the sequence is roadmap |
+| Auto-injected prompt hook, no rc file editing | Yes | Yes | Not yet | Each platform hooks the shells it actually ships with: PowerShell, pwsh, cmd and bash on Windows; zsh, bash, fish and pwsh on macOS |
+| Prompt and command marks (OSC 133) | Yes | Yes | Not yet | Both emit and consume `133;A` and `133;B`, which is what blocks are built on. `133;C` and `133;D` are roadmap on both |
 | Strip `NO_COLOR` from spawned shells | Yes | Yes | Not yet | `overrideNoColor` |
 
 ## Selection, clipboard and scrolling
@@ -100,16 +106,16 @@ means it is not implemented.
 | Feature | Windows | macOS | Linux | Notes |
 |---|---|---|---|---|
 | Slim custom title bar with sidebar, settings and search buttons | Yes | Yes | Not yet | Caption buttons on the right on Windows, beside the traffic lights on macOS |
-| Themes applied live to chrome and terminal | Partial | Yes | Not yet | Windows ships cream and dark; macOS ships cream, paper, rose, dark, navy, tokyo, dracula, catppuccin and gruvbox |
-| Background blur or backdrop material | Partial | Yes | Not yet | Windows uses a fixed Mica surface; macOS has off, light, medium and strong, and falls back to opaque theme color when Reduce transparency is on |
-| Background opacity setting | Not yet | Yes | Not yet | `backgroundOpacity` |
+| Themes applied live to chrome and terminal | Yes | Yes | Not yet | Both ship all nine: cream, paper, rose, dark, navy, tokyo, dracula, catppuccin, gruvbox |
+| Background blur or backdrop material | Partial | Yes | Not yet | Windows uses a Mica backdrop; macOS has off, light, medium and strong, and falls back to an opaque theme colour when Reduce transparency is on |
+| Background opacity setting | Yes | Yes | Not yet | `backgroundOpacity` |
 | Whole UI zoom (chrome and terminal together) | Yes | Yes | Not yet | `uiZoom` |
 | Per session font zoom with the wheel | Yes | Yes | Not yet | |
 | Font family and size, applied live | Yes | Yes | Not yet | |
 | Cursor style: block, underline, bar | Yes | Yes | Not yet | |
 | Input position: classic, bottom, pinned top | Yes | Yes | Not yet | `inputPosition` |
 | Draggable sidebar width | Yes | Yes | Not yet | |
-| Sidebar density, title mode, path line, search box | Not yet | Yes | Not yet | `sidebarDensity`, `sidebarTitleMode`, `sidebarShowPath`, `sidebarShowSearch` |
+| Sidebar density, title mode, path line, search box | Yes | Yes | Not yet | `sidebarDensity`, `sidebarTitleMode`, `sidebarShowPath`, `sidebarShowSearch` |
 
 ## Settings, updates and packaging
 
@@ -117,9 +123,9 @@ means it is not implemented.
 |---|---|---|---|---|
 | Full settings window with its own navigation | Yes | Yes | Not yet | |
 | Plain `settings.json` with the same keys on both platforms | Yes | Yes | Not yet | `%LOCALAPPDATA%\Zharp` on Windows, `~/Library/Application Support/Zharp` on macOS |
-| Rebindable keyboard shortcuts in Settings | Not yet | Yes | Not yet | Action ids match across platforms, so a settings file moves between them |
+| Rebindable keyboard shortcuts in Settings | Yes | Yes | Not yet | Action ids match across platforms, so a settings file moves between them |
 | Error log written next to the settings | Yes | Yes | Not yet | `error.log` |
-| First run onboarding | Yes | Not yet | Not yet | Theme pick and key shortcuts on Windows |
+| First run onboarding | Yes | Yes | Not yet | |
 | Background update check with a notification | Yes | Yes | Not yet | |
 | In place upgrade from inside the app | Yes | Partial | Not yet | Windows runs the silent installer and relaunches; macOS offers the download, since macOS apps are not replaced in place |
 | Signed and notarized builds | Not yet | Not yet | Not yet | The Windows installer is unsigned and the macOS build is ad hoc signed, so both show a first launch warning. See the README for the exact steps |
