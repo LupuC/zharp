@@ -108,6 +108,11 @@ final class AppSettings: Codable {
     /// Width of the changes panel when it is open, before UI zoom.
     var diffPanelWidth: Double = 460
 
+    /// Height of the changed-files list inside the changes panel, before UI
+    /// zoom. Null until the divider is dragged: up to that point the list
+    /// sizes itself to how many files there are, which is the better default.
+    var diffListHeight: Double? = nil
+
     /// Rebindable shortcuts: action id -> "Cmd+Shift+T"-style binding.
     var keybindings: [String: String] = [:]
 
@@ -171,7 +176,7 @@ final class AppSettings: Codable {
         case fontSize, fontFamily, cursorStyle, inputPosition, scrollbackLines
         case shell, defaultDirectory, lastClosedDirectory, onboarded
         case updateBaseUrl, lastNotifiedUpdate, uiZoom, sidebarWidth
-        case diffPanelWidth, keybindings
+        case diffPanelWidth, diffListHeight, keybindings
     }
 
     init(from decoder: Decoder) throws {
@@ -217,6 +222,7 @@ final class AppSettings: Codable {
         uiZoom = d(.uiZoom, 1.0)
         sidebarWidth = d(.sidebarWidth, 230)
         diffPanelWidth = d(.diffPanelWidth, 460)
+        diffListHeight = try? c.decodeIfPresent(Double.self, forKey: .diffListHeight)
         keybindings = (try? c.decodeIfPresent([String: String].self, forKey: .keybindings))
             .flatMap { $0 } ?? [:]
     }

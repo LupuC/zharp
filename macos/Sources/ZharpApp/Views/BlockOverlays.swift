@@ -157,10 +157,20 @@ final class OverlayButton: NSView {
                               y: (bounds.height - size.height) / 2,
                               width: size.width, height: size.height)
             image.isTemplate = true
-            tint.set()
-            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
-                       respectFlipped: true, hints: nil)
-            rect.fill(using: .sourceAtop)
+            // The tint has to be applied where the glyph is ALONE, not over the
+            // plate. `sourceAtop` paints wherever the destination is opaque, and
+            // the plate has already filled the whole rect by this point, so
+            // tinting in place turns the glyph into a solid block. Colouring it
+            // in an offscreen image, whose background starts transparent, keeps
+            // the fill inside the glyph's own pixels.
+            let tinted = NSImage(size: size, flipped: false) { bounds in
+                image.draw(in: bounds)
+                tint.set()
+                bounds.fill(using: .sourceAtop)
+                return true
+            }
+            tinted.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
+                        respectFlipped: true, hints: nil)
         case .text(let label):
             let text = NSAttributedString(string: label, attributes: [
                 .font: NSFont.systemFont(ofSize: pointSize),

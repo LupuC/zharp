@@ -394,6 +394,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         // git poll only runs while it is actually on screen.
         diffPanel.isHidden = true
         diffPanel.onClose = { [weak self] in self?.toggleDiff() }
+        diffPanel.setListHeight(settings.diffListHeight)
+        diffPanel.onListHeightChanged = { [weak self] height in
+            guard let self else { return }
+            // Saved on release, like the panel's own width, rather than on
+            // every frame of the drag.
+            self.settings.diffListHeight = height
+            self.settings.save()
+        }
         diffPanel.onTotalsChanged = { [weak self] added, removed in
             // While the panel is open its own poll has the freshest numbers, so
             // the title bar takes them from here instead of running git twice.
@@ -1115,7 +1123,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         // Pointed at the directory BEFORE it is shown: unhiding is what starts
         // the panel's own refresh, and it should not spend its first tick
         // reading whatever repository it was left on.
-        diffPanel.setWorkingDirectory(lastTerminalDirectory())
+        diffPanel.setWorkingDirectory(lastTerminalDirectory(), force: true)
         diffPanel.isHidden = false
         diffSplitter.isHidden = false
         diffButton.isHidden = false
@@ -1137,7 +1145,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             return
         }
         if isDiffOpen {
-            diffPanel.setWorkingDirectory(lastTerminalDirectory())
+            // force: the panel is shared by every tab in the window, so
+            // activating one has to re-read even when the directory is the
+            // same. Without it two sessions in one repository would leave the
+            // previous tab's diff on screen until the next poll tick.
+            diffPanel.setWorkingDirectory(lastTerminalDirectory(), force: true)
             return
         }
         openDiffPanel()
@@ -1874,22 +1886,31 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
 /// The 6pt grip on the sidebar's right edge.
 final class SidebarSplitterView: NSView {
+    /// Which way the divider moves. `.vertical` is a divider you drag up and
+    /// down, which is what separates the file list from the diff below it.
+    enum Axis { case horizontal, vertical }
+
+    var axis: Axis = .horizontal
     var onDrag: ((CGFloat) -> Void)?
     var onDragEnded: (() -> Void)?
-    private var lastX: CGFloat = 0
+    private var last: CGFloat = 0
 
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .resizeLeftRight)
+        addCursorRect(bounds, cursor: axis == .horizontal ? .resizeLeftRight : .resizeUpDown)
+    }
+
+    private func position(_ event: NSEvent) -> CGFloat {
+        axis == .horizontal ? event.locationInWindow.x : event.locationInWindow.y
     }
 
     override func mouseDown(with event: NSEvent) {
-        lastX = event.locationInWindow.x
+        last = position(event)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        let x = event.locationInWindow.x
-        onDrag?(x - lastX)
-        lastX = x
+        let now = position(event)
+        onDrag?(now - last)
+        last = now
     }
 
     override func mouseUp(with event: NSEvent) {
