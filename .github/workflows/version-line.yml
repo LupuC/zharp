@@ -95,9 +95,13 @@ jobs:
           Zharp ships one line across every platform. The patch is per
           platform and is expected to differ; the line is not.
 
-          If this is a feature release, it has to land on every platform
-          before the minor moves. Bring the trailing platform up in this same
-          pull request, or hold the minor bump until it is ready.
+          A feature has to land on every platform before the minor moves.
+          Pair the halves on one branch before merging and you never see this:
+          "Features land on every platform at once" in CONTRIBUTING.md.
+
+          If you are already here, the fix is to write the trailing platform's
+          half and merge it. Until then nothing can be released, on any
+          platform, including an unrelated bug fix.
 
           If you edited a version.txt by hand, do not: release-please owns
           every file that carries a version. Revert it and let the release
