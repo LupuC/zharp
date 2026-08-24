@@ -4,10 +4,12 @@ One version line covers every platform. The entry below describes the release
 that put both apps in this repository, and it carries the artifacts for both:
 the Windows installer and the macOS disk image.
 
-**This file is frozen at 0.16.0.** From 0.16.0 onward each platform keeps its
-own changelog, because each platform keeps its own version: see
+**This file is frozen at 0.16.0.** After it, each platform keeps its own
+changelog, because each platform keeps its own version:
 [windows/CHANGELOG.md](windows/CHANGELOG.md) and
-[macos/CHANGELOG.md](macos/CHANGELOG.md).
+[macos/CHANGELOG.md](macos/CHANGELOG.md). Those two hold nothing but generated
+entries, newest first, so release-please can prepend to them without stepping
+on anything written by hand. This is the file that explains.
 
 Every platform is on the same *line*, the `0.16` in `0.16.2`. The third number
 belongs to one platform's own bug fixes, so Windows can be on 0.16.2 while
