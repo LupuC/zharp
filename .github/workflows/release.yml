@@ -198,7 +198,7 @@ jobs:
     # Intel-only build, matching what the website advertises; it runs on Apple
     # Silicon through Rosetta 2 until the native ARM build ships. The runners
     # are Apple Silicon (macos-13, the last Intel image, has been retired), so
-    # the binary is cross-compiled with --arch x86_64.
+    # the binary carries both slices, so it runs natively on either.
     runs-on: macos-latest
     defaults:
       run:
@@ -252,7 +252,7 @@ jobs:
           rm -f /tmp/certificate.p12
 
       - name: Package .app
-        run: ./Scripts/make-app.sh release --arch x86_64
+        run: ./Scripts/make-app.sh release --arch arm64 --arch x86_64
 
       - name: Package .dmg
         run: ./Scripts/make-dmg.sh

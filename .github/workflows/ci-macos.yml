@@ -42,7 +42,7 @@ jobs:
     name: macos
     # GitHub's macOS runners are Apple Silicon now (macos-13, the last Intel
     # image, has been retired), so the Intel binary Zharp ships is produced by
-    # cross-compiling with --arch x86_64. Add --arch arm64 to go universal.
+    # building both slices, so the one binary runs natively on either.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -67,7 +67,7 @@ jobs:
         run: swift run -c release ZharpCoreSmokeTests
 
       - name: Package .app
-        run: ./Scripts/make-app.sh release --arch x86_64
+        run: ./Scripts/make-app.sh release --arch arm64 --arch x86_64
 
       - name: Verify the bundle
         run: |
@@ -84,6 +84,11 @@ jobs:
           # The icon font is the 1.25px-stroke subset, not the 2.8MB original.
           test "$(stat -f%z dist/Zharp.app/Contents/Resources/tabler-icons.ttf)" -lt 65536
           test ! -e dist/Zharp.app/Contents/MacOS/Zharp_ZharpApp.bundle
+          # Both slices. Dropping one is invisible on the runner and in the
+          # DMG, and the only symptom is every Apple Silicon user quietly
+          # going back through Rosetta, so it is worth asserting here.
+          lipo -archs dist/Zharp.app/Contents/MacOS/Zharp | tr ' ' '\n' | grep -qx arm64
+          lipo -archs dist/Zharp.app/Contents/MacOS/Zharp | tr ' ' '\n' | grep -qx x86_64
           codesign --verify --deep --strict dist/Zharp.app
           # The Info.plist version must match version.txt.
           plist=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" dist/Zharp.app/Contents/Info.plist)
