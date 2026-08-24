@@ -1,0 +1,46 @@
+# Line endings.
+#
+# Every shell script in this repository is executed on a Linux or macOS runner:
+# scripts/check-shared-drift.sh, macos/Scripts/*.sh, and the shell integration
+# templates in shared/shell-integration/. A CRLF in any of them is fatal there,
+# and the error does not name the real cause: the kernel reads the shebang as
+# `/usr/bin/env bash\r` and reports that bash does not exist, or the shell reads
+# `set -euo pipefail\r` and rejects an option nobody typed.
+#
+# Whether that happens today depends on a setting on the contributor's machine,
+# which is not somewhere correctness should live. `git config core.autocrlf` is
+# usually `true` on Windows, which converts CRLF back to LF on the way into a
+# commit and hides the problem. When it is `false`, or when a file is added by a
+# tool that writes CRLF, the CRLF goes straight into the blob and CI breaks for
+# everyone.
+#
+# The rules below take that decision away from the machine. `text=auto` lets git
+# normalise anything it detects as text, and the explicit `eol=lf` entries pin
+# the files where the ending is not a preference but a requirement.
+
+* text=auto
+
+*.sh    text eol=lf
+*.bash  text eol=lf
+*.zsh   text eol=lf
+*.fish  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+Makefile text eol=lf
+
+# .ps1 is deliberately NOT pinned to CRLF, even though it only ever runs on
+# Windows. shared/shell-integration/zharp.ps1 is compared byte for byte against
+# the copy embedded in the app source by scripts/check-shared-drift.sh, which
+# runs on an Ubuntu runner. Checking the shared copy out with CRLF there while
+# the embedded literal has LF would read as drift on every single pull request.
+# PowerShell does not care either way.
+
+# Binary, so git never tries to diff, merge or convert them. Most of these are
+# the brand package under shared/.
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.icns  binary
+*.ttf   binary
+*.dmg   binary
+*.exe   binary

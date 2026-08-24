@@ -3,9 +3,20 @@
 Platform neutral assets that more than one Zharp app needs to agree on, kept
 here once so there is a single place to look when they disagree.
 
-Nothing in this directory is compiled, imported, or read at runtime. The apps
-carry their own copies of this content, and `scripts/check-shared-drift.sh`
-fails the build when a copy stops matching the file here.
+Nothing in this directory is imported or read at runtime.
+
+The shell scripts and palettes are duplicated inside each app, because the apps
+embed them rather than loading them, and `scripts/check-shared-drift.sh` fails
+the build when a copy stops matching the file here.
+
+The brand artwork is not duplicated. It is one copy, and the apps point at it:
+`macos/Scripts/make-icon.sh` renders `AppIcon.icns` from
+`shared/brand/icons/icon-1024.png` at build time, and the small number of
+raster assets the apps actually ship (`logo-cream.png`, `logo-ink.png`,
+`zharp.ico`) are pre-rendered and committed next to the code that uses them.
+There is nothing here for the drift checker to compare, which is the point:
+until 0.16.0 the whole brand package existed twice, once under `windows/` and
+once under `macos/`, 64 byte-identical files that nothing checked.
 
 ## What is in here
 
@@ -18,6 +29,13 @@ shared/
     zharp.ps1
   themes/
     palettes.json        the terminal color schemes, as data
+  brand/                 the brand package: open guide.html for the design guide
+    logo/                master vectors, lockups, wordmark, diagrams
+    icons/               every raster size, favicon.ico, apple touch, maskable
+    social/              1200x630 share card
+    tokens/              tokens.css and tokens.json
+    misuse/              the failure cases illustrated in the guide
+  logos/                 per theme app icon exports, cream, dark and navy
   README.md              this file
 ```
 

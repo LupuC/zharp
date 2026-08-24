@@ -1,0 +1,126 @@
+name: DCO
+
+# The project takes contributions under the Developer Certificate of Origin
+# (https://developercertificate.org/) rather than a CLA: you certify that you
+# wrote the patch or have the right to submit it, by signing off your commits
+# with `git commit -s`.
+#
+# README.md, CONTRIBUTING.md and the pull request template all tell contributors
+# that a missing sign-off fails a check. This is that check. Without it those
+# three documents describe a rule nothing enforces, and the first pull request
+# to arrive without a sign-off merges anyway.
+#
+# What counts as signed off: every non-merge commit in the pull request carries a
+# `Signed-off-by: Name <email>` trailer whose email matches the commit author's.
+# Merge commits are exempt because git creates them and the contributor never
+# writes their message.
+
+on:
+  pull_request:
+
+concurrency:
+  group: dco-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dco:
+    name: dco
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 because the range below needs the base commit and every
+      # commit on the branch present locally. The default shallow clone has one.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Every commit is signed off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          status=0
+
+          # From the merge base rather than from BASE_SHA directly: if main has
+          # moved on since the pull request was opened, BASE_SHA is no longer an
+          # ancestor of the branch and the range would list commits this pull
+          # request did not write.
+          #
+          # --no-merges: a merge commit's message is written by git, not by the
+          # contributor, so requiring a trailer on it would fail pull requests
+          # that are merely out of date with main.
+          base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          commits=$(git rev-list --no-merges "$base".."$HEAD_SHA")
+
+          if [ -z "$commits" ]; then
+            echo "No commits to check."
+            exit 0
+          fi
+
+          for sha in $commits; do
+            author=$(git show -s --format='%ae' "$sha")
+            subject=$(git show -s --format='%s' "$sha")
+
+            # Bots are exempt. release-please writes the "chore: release main"
+            # commit on its own release pull request, as github-actions[bot],
+            # with no sign-off and no way to add one. Without this the release
+            # pull request could never be merged, which would stop every
+            # release. There is nothing to certify: the bot is not contributing
+            # authored work, it is rewriting version files in this repository.
+            case "$author" in
+              *"[bot]"*)
+                echo "skip  $(git rev-parse --short "$sha")  $subject  (bot)"
+                continue
+                ;;
+            esac
+
+            # %(trailers:key=Signed-off-by) asks git for the trailer block it
+            # parses itself, so a line in the middle of the body, or one that
+            # only looks like a trailer, is not accepted as a sign-off.
+            #
+            # A herestring rather than a pipe into grep -q, for the reason
+            # spelled out at the top of ci-required.yml: grep -q stops reading at
+            # the first match, and under `set -o pipefail` the writer dying of
+            # SIGPIPE would turn a match into a failure.
+            #
+            # Both sides are lowercased with tr rather than matched with
+            # `grep -i`: the comparison is on an email address, where case is
+            # not meaningful, and some grep builds abort outright on -i in a
+            # UTF-8 locale. tr has neither problem.
+            signoffs=$(git show -s --format='%(trailers:key=Signed-off-by,valueonly)' "$sha" | tr 'A-Z' 'a-z')
+            needle="<$(printf '%s' "$author" | tr 'A-Z' 'a-z')>"
+            if grep -qF "$needle" <<< "$signoffs"; then
+              echo "ok    $(git rev-parse --short "$sha")  $subject"
+            else
+              echo "FAIL  $(git rev-parse --short "$sha")  $subject"
+              echo "      no 'Signed-off-by:' line for the author, $author"
+              status=1
+            fi
+          done
+
+          if [ "$status" -ne 0 ]; then
+            cat <<'EOF'
+
+          ------------------------------------------------------------------
+          One or more commits are not signed off.
+
+          Sign off future commits as you make them:
+
+              git commit -s -m "fix: stop the cursor blinking in the alt screen"
+
+          Fix the commits already on this branch, all at once:
+
+              git rebase --signoff main
+              git push --force-with-lease
+
+          The sign-off must carry the same email as the commit author. If you
+          commit as one identity and sign off as another, this check fails.
+          What you are certifying is at https://developercertificate.org/.
+          ------------------------------------------------------------------
+          EOF
+            exit 1
+          fi
+
+          echo
+          echo "All commits signed off."
