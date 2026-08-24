@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build assets for (e.g. v0.15.0)"
+        description: "Release tag to build assets for (e.g. v0.16.0)"
         required: true
         type: string
 
@@ -160,8 +160,8 @@ jobs:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       # macos/version.txt is what names the disk image and what gets baked into
-      # Info.plist, so a mismatch would attach Zharp-0.14.1.dmg to release
-      # v0.15.0. Fail here instead.
+      # Info.plist, so a mismatch would attach Zharp-0.15.9.dmg to release
+      # v0.16.0. Fail here instead.
       - name: Check version.txt matches the release tag
         run: |
           expected="${RELEASE_TAG#v}"

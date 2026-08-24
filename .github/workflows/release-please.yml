@@ -14,11 +14,11 @@ name: Release Please
 #
 # How the one-version rule is enforced (release-please-config.json):
 #   - the "." package owns the tag, the release and the changelog. It has
-#     include-component-in-tag: false, so the tag is v0.15.0 and not
-#     zharp-v0.15.0, and it sees every commit in the repo.
+#     include-component-in-tag: false, so the tag is v0.16.0 and not
+#     zharp-v0.16.0, and it sees every commit in the repo.
 #   - "windows" and "macos" are components. They only exist so their own
 #     version files get rewritten. Both set skip-github-release: true, so
-#     they never create a windows-v0.15.0 / macos-v0.15.0 tag of their own,
+#     they never create a windows-v0.16.0 / macos-v0.16.0 tag of their own,
 #     and skip-changelog: true, so there is no second changelog per platform.
 #   - the linked-versions plugin ties those two components together: whichever
 #     one would bump highest sets the version, and the other is dragged to the

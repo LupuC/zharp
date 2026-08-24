@@ -19,13 +19,13 @@ what can honestly be met, not what sounds good.
 
 | Version | Supported |
 |---|---|
-| 0.15.x and later | Yes, fixes land in a new patch release |
+| 0.16.x and later | Yes, fixes land in a new patch release |
 | 0.14.x and earlier | No, please upgrade |
 
-Anything before 0.15.0 was released separately per platform, before the two
-apps moved into this repository. Those builds are not maintained. If you are on
-one of them, update to the current release first and check whether the issue is
-still there.
+0.16.0 is the first release from this repository. Anything earlier was released
+separately per platform, from the two private repositories the apps used to
+live in, and those builds are not maintained. If you are on one of them, update
+to the current release first and check whether the issue is still there.
 
 To find your version:
 
@@ -59,7 +59,7 @@ purpose, so that reports do not sit in a personal inbox.
 
 The more of this you include, the faster it gets fixed:
 
-- Zharp version and platform (for example `0.15.0`, macOS 15.2 on Apple
+- Zharp version and platform (for example `0.16.0`, macOS 15.2 on Apple
   silicon, or Windows 11 24H2).
 - The shell and its version, if the shell is involved (`zsh --version`,
   `bash --version`, `pwsh --version`).

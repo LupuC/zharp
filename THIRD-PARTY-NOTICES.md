@@ -5,10 +5,16 @@ runtime or downloaded on first launch, they are copied into the application
 bundle and the installer, so every copy of Zharp that anyone downloads
 contains them.
 
-Both licences below require the copyright notice and the licence text to
+Most of the licences below require the copyright notice and the licence text to
 travel with the binary. That is what this file is for. If you build, fork,
 repackage or redistribute Zharp in any form, ship this file (or an equivalent
 notice screen containing the same text) alongside it.
+
+Two kinds of thing are listed. The fonts and icons are committed in this
+repository, so you can see them in the tree. The Windows runtime components are
+not: they arrive from NuGet during the build and are copied into the installer
+because the Windows app publishes self contained, which means a copy of each
+one is inside every `ZharpSetup.exe` anyone downloads.
 
 Zharp's own code is MIT licensed, see [LICENSE](LICENSE). Nothing here changes
 that, these are separate grants for the bundled assets.
@@ -181,6 +187,75 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ---
 
+## .NET runtime and libraries
+
+`windows/src/Zharp.App/Zharp.App.csproj` publishes self contained
+(`dotnet publish --self-contained true` in `.github/workflows/release.yml`),
+so the .NET runtime, the base class libraries and the runtime's native
+components are copied next to `Zharp.exe` and packed into the installer. A
+machine with no .NET installed can run Zharp, which is the point.
+
+Licence: MIT.
+Copyright (c) .NET Foundation and Contributors.
+Source: <https://github.com/dotnet/runtime>
+
+The licence text is the same MIT text reproduced under Tabler Icons above.
+
+---
+
+## Microsoft Windows App SDK
+
+The WinUI 3 framework the Windows app is built on, referenced as the
+`Microsoft.WindowsAppSDK` NuGet package. The project sets
+`WindowsAppSDKSelfContained`, so the framework's binaries are redistributed
+inside the installer rather than expected on the user's machine.
+
+This one is **not** an open source licence, and it is the only entry here that
+is not. The Windows App SDK source repository is MIT licensed, but the binaries
+in the NuGet package are shipped under the Microsoft Software Licence Terms for
+the Windows App SDK, which permit redistribution as part of an application and
+carry their own conditions.
+
+Licence: Microsoft Software Licence Terms, Microsoft Windows App SDK.
+Copyright (c) Microsoft Corporation.
+Terms: <https://aka.ms/WinAppSDKLicense>
+Source of the SDK itself: <https://github.com/microsoft/WindowsAppSDK>
+
+The full terms travel inside the NuGet package. To read the exact text for the
+version this build pins, look in the extracted package under
+`%USERPROFILE%\.nuget\packages\microsoft.windowsappsdk\<version>\`.
+
+---
+
+## Win2D
+
+`Microsoft.Graphics.Win2D`, the Direct2D wrapper the Windows terminal view uses
+to composite text on the GPU. Redistributed in the installer for the same
+reason as everything else above.
+
+Licence: MIT.
+Copyright (c) Microsoft Corporation. All rights reserved.
+Source: <https://github.com/microsoft/Win2D>
+
+The licence text is the same MIT text reproduced under Tabler Icons above.
+
+---
+
+## Inno Setup
+
+`windows/installer/zharp.iss` is compiled by Inno Setup, so the installer
+executable contains Inno Setup's own installer engine. Inno Setup's licence
+allows installers built with it to be distributed freely, including
+commercially, and does not require a royalty or a separate notice; this entry
+is here because the code is in the shipped binary and this file is meant to be
+a complete list of what is.
+
+Licence: the Inno Setup licence (a modified BSD style licence).
+Copyright (c) 1997-2025 Jordan Russell. Portions copyright (c) Martijn Laan.
+Source and licence: <https://github.com/jrsoftware/issrc>
+
+---
+
 ## Adding something new
 
 If you open a pull request that adds a bundled font, icon set, image, sound or
@@ -188,3 +263,8 @@ vendored source file, add a section to this file in the same shape: what it is,
 where it lives in the tree, the licence name, the copyright line, and the full
 licence text. A link on its own is not enough for MIT or the OFL, both of them
 require the text itself to ship with the binary.
+
+The same applies to a new package reference whose binaries end up in the
+installer, which is every runtime dependency as long as the Windows app
+publishes self contained. Those do not appear in the tree, so nothing will
+remind you: check what a new `PackageReference` drags in before merging it.

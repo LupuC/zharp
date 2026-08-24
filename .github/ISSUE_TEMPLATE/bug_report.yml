@@ -74,8 +74,9 @@ body:
       label: Zharp version
       description: |
         On macOS: the Zharp menu, then "About Zharp".
+        On Windows: Settings, then "About".
         If you built from source, run `git describe --tags --always` inside your clone and paste the output.
-      placeholder: "0.15.0"
+      placeholder: "0.16.0"
     validations:
       required: true
 

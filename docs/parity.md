@@ -10,7 +10,7 @@ Keeping it accurate is part of shipping a feature: **any pull request that adds,
 removes or changes a user facing feature updates the relevant row here in the
 same PR.** A row that is wrong is treated as a bug.
 
-Current as of 0.15.0 on Windows and macOS. Linux has no code yet, so its column
+Current as of 0.16.0 on Windows and macOS. Linux has no code yet, so its column
 is "Not yet" everywhere; it is here so the size of the port is visible.
 
 Legend: **Yes** means shipped and usable. **Partial** means it exists but is
@@ -123,4 +123,4 @@ means it is not implemented.
 | Background update check with a notification | Yes | Yes | Not yet | |
 | In place upgrade from inside the app | Yes | Partial | Not yet | Windows runs the silent installer and relaunches; macOS offers the download, since macOS apps are not replaced in place |
 | Signed and notarized builds | Not yet | Not yet | Not yet | The Windows installer is unsigned and the macOS build is ad hoc signed, so both show a first launch warning. See the README for the exact steps |
-| Package manager entry | Yes | Not yet | Not yet | winget, `Zharp.Zharp` |
+| Package manager entry | Not yet | Not yet | Not yet | The winget manifest and the release automation are written, but `Zharp.Zharp` has not been submitted to winget-pkgs yet, so there is nothing to install from |

@@ -55,8 +55,10 @@ git clone git@github.com:LupuC/zharp.git
 cd zharp
 ```
 
-That gives you both apps and all the assets. On a fresh clone this is a few
-hundred megabytes of history, mostly icons, fonts and brand images.
+That gives you both apps and all the assets. This is what almost everyone
+should do: the repository starts at the 0.16.0 consolidation rather than at
+either app's first commit, so a full clone is only a few megabytes and takes a
+second or two.
 
 If you have not set up an SSH key with GitHub, use HTTPS instead:
 
@@ -67,8 +69,10 @@ cd zharp
 
 ### The lean way: sparse checkout of one platform
 
-If you only ever intend to touch the macOS app, there is no reason to have the
-Windows app sitting on your disk. Run this instead:
+This is not about download size, which is small either way. It is about not
+having the other platform's app in your editor's file tree, its search results
+and its grep output while you work. If you only ever intend to touch the macOS
+app, run this instead:
 
 ```bash
 git clone --filter=blob:none --sparse git@github.com:LupuC/zharp.git
@@ -630,19 +634,19 @@ The scope is optional but helpful in a repository with two apps. Use `windows`,
 
 Zharp is pre-1.0, and the release tooling is configured so that breaking changes
 bump the minor version rather than the major one while the version is still
-`0.x`. Assuming the current version is `0.15.0`:
+`0.x`. Assuming the current version is `0.16.0`:
 
 | Prefix | Meaning | Next version | Shows in changelog |
 |---|---|---|---|
-| `feat:` | A new feature | `0.16.0` (minor) | Yes, under Features |
-| `fix:` | A bug fix | `0.15.1` (patch) | Yes, under Bug Fixes |
-| `perf:` | A performance improvement | `0.15.1` (patch) | Yes |
-| `refactor:` | A change with no behaviour change | `0.15.1` (patch) | Yes |
+| `feat:` | A new feature | `0.17.0` (minor) | Yes, under Features |
+| `fix:` | A bug fix | `0.16.1` (patch) | Yes, under Bug Fixes |
+| `perf:` | A performance improvement | `0.16.1` (patch) | Yes |
+| `refactor:` | A change with no behaviour change | `0.16.1` (patch) | Yes |
 | `docs:` | Documentation only | no release | No |
 | `chore:` | Tooling, dependencies, housekeeping | no release | No |
 | `test:` | Tests only | no release | No |
 | `ci:` | Workflow changes | no release | No |
-| `feat!:` or a `BREAKING CHANGE:` footer | An incompatible change | `0.16.0` (minor, because we are pre-1.0) | Yes, called out at the top |
+| `feat!:` or a `BREAKING CHANGE:` footer | An incompatible change | `0.17.0` (minor, because we are pre-1.0) | Yes, called out at the top |
 
 If a release contains only `docs:` and `chore:` commits, no release happens at
 all. That is intentional, and it is why picking the right prefix matters more
@@ -811,9 +815,9 @@ minds, but do it before asking for a review.
 
 ## What CI runs on a pull request
 
-The workflows live in `.github/workflows/` at the repository root. Two of them
-matter to you as a contributor. The release workflows never run on a pull
-request.
+The workflows live in `.github/workflows/` at the repository root. Three of them
+matter to you as a contributor: the Windows build, the macOS build and the DCO
+check. The release workflows never run on a pull request.
 
 **Only the platforms you touched get built.** The jobs have path filters on
 them, so a PR that changes only Swift files under `macos/` does not spin up a
@@ -847,6 +851,17 @@ Runs on a `macos-latest` runner, which is Apple Silicon:
    64 KB; the nested SwiftPM resource bundle has been unpacked;
    `codesign --verify --deep --strict` passes; the version in `Info.plist`
    matches `version.txt`; and `lipo -archs` reports exactly `x86_64`.
+
+### The DCO check
+
+Runs on every pull request, on an Ubuntu runner, and takes a couple of seconds.
+It walks every commit your branch adds and fails if one of them has no
+`Signed-off-by:` trailer matching that commit's author email. Merge commits are
+skipped, because git writes those. Bot commits are skipped, because
+release-please's own release commit has no sign-off and could never get one.
+
+The failure message includes the two commands that fix it, so you do not need
+to come back here.
 
 ### What CI does not do
 
@@ -987,16 +1002,22 @@ gh pr create --draft --fill
 
 ## Things you should never edit by hand
 
-**Version numbers.** All platforms share one version line, currently `0.15.0`,
-and release automation owns every file that carries it. On Windows that is
-`windows/Directory.Build.props`, `windows/installer/zharp.iss`,
-`windows/version.txt` and `windows/.release-please-manifest.json`. On macOS it is
-`macos/version.txt`, `macos/Sources/ZharpApp/App.swift` and
-`macos/.release-please-manifest.json`. If you bump one of these in a PR, it will
-be reverted, and it will conflict with the open release PR.
+**Version numbers.** All platforms share one version line, currently `0.16.0`,
+and release automation owns every file that carries it:
 
-**Changelogs.** `windows/CHANGELOG.md` and `macos/CHANGELOG.md` are generated
-from commit messages. Write a good commit message instead.
+* `version.txt` and `.release-please-manifest.json` at the repository root
+* `windows/version.txt`, `windows/Directory.Build.props`,
+  `windows/installer/zharp.iss`
+* `macos/version.txt`, `macos/Sources/ZharpApp/App.swift`
+
+If you bump one of these in a pull request it will be reverted, it will
+conflict with the open release pull request, and `release.yml` refuses to build
+a release whose `version.txt` disagrees with the tag.
+
+**The changelog.** `CHANGELOG.md` at the root is generated from commit
+messages, and it is the only one: both platforms set `skip-changelog` in
+`release-please-config.json`, because one release covers both. Write a good
+commit message instead of editing it.
 
 **Generated and build output.** None of this belongs in a commit:
 
