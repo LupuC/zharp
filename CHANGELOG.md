@@ -7,9 +7,12 @@ the Windows installer and the macOS disk image.
 **This file is frozen at 0.16.0.** After it, each platform keeps its own
 changelog, because each platform keeps its own version:
 [windows/CHANGELOG.md](windows/CHANGELOG.md) and
-[macos/CHANGELOG.md](macos/CHANGELOG.md). Those two hold nothing but generated
-entries, newest first, so release-please can prepend to them without stepping
-on anything written by hand. This is the file that explains.
+[macos/CHANGELOG.md](macos/CHANGELOG.md), each created by release-please at
+that platform's first release from this repository.
+
+Nothing is written into those two by hand. release-please owns the header and
+prepends every entry beneath it, so anything anyone adds gets pushed to the
+bottom and stranded under the release notes. This is the file that explains.
 
 Every platform is on the same *line*, the `0.16` in `0.16.2`. The third number
 belongs to one platform's own bug fixes, so Windows can be on 0.16.2 while
