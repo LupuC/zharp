@@ -84,19 +84,18 @@ jobs:
           # The icon font is the 1.25px-stroke subset, not the 2.8MB original.
           test "$(stat -f%z dist/Zharp.app/Contents/Resources/tabler-icons.ttf)" -lt 65536
           test ! -e dist/Zharp.app/Contents/MacOS/Zharp_ZharpApp.bundle
-          # Both slices. Dropping one is invisible on the runner and in the
-          # DMG, and the only symptom is every Apple Silicon user quietly
-          # going back through Rosetta, so it is worth asserting here.
-          lipo -archs dist/Zharp.app/Contents/MacOS/Zharp | tr ' ' '\n' | grep -qx arm64
-          lipo -archs dist/Zharp.app/Contents/MacOS/Zharp | tr ' ' '\n' | grep -qx x86_64
           codesign --verify --deep --strict dist/Zharp.app
           # The Info.plist version must match version.txt.
           plist=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" dist/Zharp.app/Contents/Info.plist)
           expected=$(tr -d '[:space:]' < version.txt)
           echo "bundle $plist, version.txt $expected"
           test "$plist" = "$expected"
-          # The release ships Intel-only; fail if the cross-compile silently
-          # fell back to the runner's native architecture.
+          # The release ships one universal binary. Fail if either slice is
+          # missing: the runner cannot tell, the DMG cannot tell, and the only
+          # symptom of losing arm64 is every Apple Silicon user quietly going
+          # back through Rosetta. Order is not guaranteed, so match on
+          # membership rather than on the whole string.
           archs=$(lipo -archs dist/Zharp.app/Contents/MacOS/Zharp)
           echo "architectures: $archs"
-          test "$archs" = "x86_64"
+          echo "$archs" | tr ' ' '\n' | grep -qx arm64
+          echo "$archs" | tr ' ' '\n' | grep -qx x86_64

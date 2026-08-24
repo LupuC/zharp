@@ -7,8 +7,8 @@
 #
 # With no --arch it builds for this machine. Passing --arch cross-compiles;
 # repeat it for a universal binary:
-#   ./Scripts/make-app.sh release --arch x86_64              # Intel, what ships
-#   ./Scripts/make-app.sh release --arch arm64 --arch x86_64 # universal
+#   ./Scripts/make-app.sh release --arch x86_64              # Intel only
+#   ./Scripts/make-app.sh release --arch arm64 --arch x86_64 # universal, what ships
 #
 # --arch needs SwiftPM's multi-arch path, which requires a full Xcode install
 # (the Command Line Tools alone do not ship XCBuild). CI runners have Xcode;
