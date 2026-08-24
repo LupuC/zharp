@@ -1,18 +1,34 @@
 name: Release Artifacts
 
-# Builds every platform for one release and attaches all of it to that single
-# GitHub release. release-please.yml publishes the release; this workflow fills
-# it with downloads.
+# Builds ONE platform for one release. release-please.yml publishes the
+# release; this workflow fills it with that platform's downloads.
 #
-# The two jobs are independent and run on their own runners, so a Windows
-# failure never costs you the macOS disk image or the other way round. Rerun
-# just the failed job from the Actions tab.
+# Each platform now releases on its own tag, so which platform this run builds
+# is written on the tag it fired for:
 #
-# Assets attached per release:
-#   Windows  ZharpSetup-<version>.exe, ZharpSetup-<version>.exe.sha256,
-#            ZharpSetup.exe          (stable name, for /releases/latest/download)
-#   macOS    Zharp-<version>.dmg,     Zharp-<version>.dmg.sha256,
-#            Zharp.dmg               (stable name, for /releases/latest/download)
+#   windows-v0.16.2   ->  the Windows job runs, the macOS job is skipped
+#   macos-v0.16.0     ->  the macOS job runs, the Windows job is skipped
+#
+# That is the point of the split. A Windows-only bug fix used to drag macOS to
+# the same version number and rebuild a disk image whose only difference was
+# the version string inside it. Now macOS simply is not rebuilt, and stays on
+# whatever version it last shipped.
+#
+# The `resolve` job below reads the tag and the two build jobs gate on it. The
+# job names are unchanged, so a rerun-failed-jobs from the Actions tab still
+# does what you expect.
+#
+# Assets attached to a windows-v* release:
+#   ZharpSetup-<version>.exe, ZharpSetup-<version>.exe.sha256, ZharpSetup.exe
+# Assets attached to a macos-v* release:
+#   Zharp-<version>.dmg, Zharp-<version>.dmg.sha256, Zharp.dmg
+#
+# The unversioned names are a stable filename within their own release. They
+# are NOT reachable through /releases/latest/download any more: "latest" is
+# whichever platform released most recently, so that path would hand a macOS
+# user a Windows installer half the time. Link a specific release, or let the
+# site resolve it (it looks for the newest release carrying each platform's
+# asset).
 
 on:
   release:
@@ -20,11 +36,11 @@ on:
   # Manual rebuild for a release whose assets are missing, most often because
   # the release was published with the default bot token, which does not fire
   # the `release` event above. Pass the tag exactly as it appears on the
-  # release, including the leading v.
+  # release, component prefix included.
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build assets for (e.g. v0.16.0)"
+        description: "Release tag to build assets for (e.g. windows-v0.16.2)"
         required: true
         type: string
 
@@ -32,14 +48,54 @@ permissions:
   contents: write
 
 jobs:
+  # Works out which platform this release belongs to, from the component
+  # prefix release-please puts on the tag. Anything unrecognised fails here
+  # rather than silently building nothing, because a release that quietly
+  # attaches no installer looks exactly like a release that has not finished
+  # uploading yet, and people wait for it forever.
+  resolve:
+    name: resolve
+    runs-on: ubuntu-latest
+    outputs:
+      platform: ${{ steps.tag.outputs.platform }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Read the platform off the tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          case "$RELEASE_TAG" in
+            windows-v*) platform=windows; version="${RELEASE_TAG#windows-v}" ;;
+            macos-v*)   platform=macos;   version="${RELEASE_TAG#macos-v}"   ;;
+            *)
+              echo "::error::Tag '$RELEASE_TAG' has no platform on it. Tags look like windows-v0.16.2 or macos-v0.16.0."
+              exit 1
+              ;;
+          esac
+
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag '$RELEASE_TAG' does not carry a MAJOR.MINOR.PATCH version."
+            exit 1
+          fi
+
+          echo "platform=$platform" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "$RELEASE_TAG is $platform $version"
+
   windows:
     name: Windows installer
+    needs: resolve
+    if: needs.resolve.outputs.platform == 'windows'
     runs-on: windows-latest
     defaults:
       run:
         working-directory: windows
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -49,14 +105,15 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      # release-please bumps every platform to the same number, so a mismatch
-      # here means something was edited by hand or the release was tagged off a
-      # commit that predates the bump. Stop now rather than publish an
-      # installer whose filename contradicts the release it hangs under.
+      # A mismatch means a version.txt was edited by hand or the release was
+      # tagged off a commit that predates the bump. Stop now rather than
+      # publish an installer whose filename contradicts the release it hangs
+      # under. The expected number comes from the resolve job, which has
+      # already stripped the windows-v prefix off the tag.
       - name: Check version.txt matches the release tag
         shell: pwsh
         run: |
-          $expected = $env:RELEASE_TAG -replace '^v', ''
+          $expected = $env:RELEASE_VERSION
           $actual = (Get-Content version.txt -Raw).Trim()
           if ($expected -ne $actual) {
             Write-Host "::error::windows/version.txt says $actual but the release tag is $env:RELEASE_TAG (expected $expected)."
@@ -105,7 +162,7 @@ jobs:
             Write-Host "WINGET_TOKEN is not set - skipping the winget submission."
             exit 0
           }
-          $version = $env:RELEASE_TAG -replace '^v', ''
+          $version = $env:RELEASE_VERSION
           $url = "https://zharp.app/download/windows/$version"
 
           # The site serves this straight from the release assets uploaded a
@@ -136,6 +193,8 @@ jobs:
 
   macos:
     name: macOS disk image
+    needs: resolve
+    if: needs.resolve.outputs.platform == 'macos'
     # Intel-only build, matching what the website advertises; it runs on Apple
     # Silicon through Rosetta 2 until the native ARM build ships. The runners
     # are Apple Silicon (macos-13, the last Intel image, has been retired), so
@@ -146,6 +205,7 @@ jobs:
         working-directory: macos
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
       # Job-level so the `if:` guards below can read them: a step's own `env:`
       # is not in scope when its `if:` is evaluated.
       MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
@@ -161,10 +221,10 @@ jobs:
 
       # macos/version.txt is what names the disk image and what gets baked into
       # Info.plist, so a mismatch would attach Zharp-0.15.9.dmg to release
-      # v0.16.0. Fail here instead.
+      # macos-v0.16.0. Fail here instead.
       - name: Check version.txt matches the release tag
         run: |
-          expected="${RELEASE_TAG#v}"
+          expected="$RELEASE_VERSION"
           actual=$(tr -d '[:space:]' < version.txt)
           if [ "$expected" != "$actual" ]; then
             echo "::error::macos/version.txt says $actual but the release tag is $RELEASE_TAG (expected $expected)."

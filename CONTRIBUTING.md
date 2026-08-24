@@ -634,7 +634,8 @@ The scope is optional but helpful in a repository with two apps. Use `windows`,
 
 Zharp is pre-1.0, and the release tooling is configured so that breaking changes
 bump the minor version rather than the major one while the version is still
-`0.x`. Assuming the current version is `0.16.0`:
+`0.x`. The version that moves is the one for the platform directory your
+commit touches. Assuming that platform is on `0.16.0`:
 
 | Prefix | Meaning | Next version | Shows in changelog |
 |---|---|---|---|
@@ -815,9 +816,10 @@ minds, but do it before asking for a review.
 
 ## What CI runs on a pull request
 
-The workflows live in `.github/workflows/` at the repository root. Three of them
-matter to you as a contributor: the Windows build, the macOS build and the DCO
-check. The release workflows never run on a pull request.
+The workflows live in `.github/workflows/` at the repository root. Four of them
+matter to you as a contributor: the Windows build, the macOS build, the DCO
+check and the version line check. The release workflows never run on a pull
+request.
 
 **Only the platforms you touched get built.** The jobs have path filters on
 them, so a PR that changes only Swift files under `macos/` does not spin up a
@@ -862,6 +864,20 @@ release-please's own release commit has no sign-off and could never get one.
 
 The failure message includes the two commands that fix it, so you do not need
 to come back here.
+
+### The version line check
+
+Runs on every pull request and takes a couple of seconds. It reads
+`windows/version.txt` and `macos/version.txt` and fails if they disagree on
+`major.minor`.
+
+Zharp ships one line across every platform, and the patch underneath it belongs
+to a single platform's bug fixes. Windows on 0.16.2 while macOS is on 0.16.0 is
+correct and passes. Windows on 0.16.2 while macOS is on 0.17.0 is drift and
+fails, because a feature moved one platform's line without the other.
+
+You will normally only see this on a release pull request, or if you edited a
+version file by hand, which you should not.
 
 ### What CI does not do
 
@@ -1002,22 +1018,23 @@ gh pr create --draft --fill
 
 ## Things you should never edit by hand
 
-**Version numbers.** All platforms share one version line, currently `0.16.0`,
-and release automation owns every file that carries it:
+**Version numbers.** Release automation owns every file that carries one:
 
-* `version.txt` and `.release-please-manifest.json` at the repository root
+* `.release-please-manifest.json` at the repository root
 * `windows/version.txt`, `windows/Directory.Build.props`,
   `windows/installer/zharp.iss`
 * `macos/version.txt`, `macos/Sources/ZharpApp/App.swift`
 
 If you bump one of these in a pull request it will be reverted, it will
-conflict with the open release pull request, and `release.yml` refuses to build
-a release whose `version.txt` disagrees with the tag.
+conflict with the open release pull request, `release.yml` refuses to build a
+release whose `version.txt` disagrees with the tag, and `version-line.yml`
+refuses to merge a pull request that puts the platforms on different lines.
 
-**The changelog.** `CHANGELOG.md` at the root is generated from commit
-messages, and it is the only one: both platforms set `skip-changelog` in
-`release-please-config.json`, because one release covers both. Write a good
-commit message instead of editing it.
+**The changelogs.** `windows/CHANGELOG.md` and `macos/CHANGELOG.md` are
+generated from commit messages, one per platform, because each platform now
+has its own version history. `CHANGELOG.md` at the root is frozen: it records
+the move into this repository and stops at 0.16.0. Write a good commit message
+instead of editing any of them.
 
 **Generated and build output.** None of this belongs in a commit:
 
