@@ -40,11 +40,31 @@ final class SessionItem {
 
     var isSettings: Bool { session == nil }
 
+    /// Whether the changes panel is open for THIS session.
+    ///
+    /// There is one panel in the window, but the flag belongs to the session:
+    /// each tab is its own workspace in its own repository, so opening the
+    /// diff in one says nothing about what the others want to see.
+    var diffOpen = false
+
     /// Fixed display name (shell name / page name).
     let title: String
 
     /// Raised on the main thread whenever a displayed value changed.
     var changed: (() -> Void)?
+
+    /// Raised on the main thread when the shell reports a new directory (OSC 7).
+    ///
+    /// `session.workingDirectoryChanged` is a single closure and this item
+    /// already owns it to keep the tab subtitle honest, so a second assignment
+    /// elsewhere would silently drop the first. Anything else that cares hangs
+    /// itself here instead.
+    var directoryChanged: ((String) -> Void)?
+
+    /// Raised on the main thread once a command has finished, which the
+    /// emulator knows from the next prompt's OSC 133 mark. Same reason as
+    /// `directoryChanged`: `session.commandExecuted` is already spoken for.
+    var commandFinished: (() -> Void)?
 
     /// Abbreviated working directory ("~", "~/src/app") or a fixed caption.
     var subtitle: String {
@@ -132,7 +152,10 @@ final class SessionItem {
         self.subtitleValue = Self.abbreviate(session.workingDirectory)
 
         session.workingDirectoryChanged = { [weak self] cwd in
-            DispatchQueue.main.async { self?.subtitle = Self.abbreviate(cwd) }
+            DispatchQueue.main.async {
+                self?.subtitle = Self.abbreviate(cwd)
+                self?.directoryChanged?(cwd)
+            }
         }
 
         session.commandExecuted = { [weak self] command in
@@ -149,6 +172,7 @@ final class SessionItem {
                                         directory: session.workingDirectory,
                                         shell: self.title)
                 if changedAny { self.changed?() }
+                self.commandFinished?()
             }
         }
 

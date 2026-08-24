@@ -33,6 +33,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var settingsView: SettingsView?
 
     private static let minSidebarWidth: CGFloat = 168
+    private static let minDiffWidth: CGFloat = 320
+    /// What the terminal keeps for itself no matter how wide the panel is
+    /// dragged. The panel's ceiling is whatever is left over.
+    private static let minTerminalWidth: CGFloat = 240
+    private static let splitterGrip: CGFloat = 6
     private var terminalPalette = Palette.cream()
 
     // Chrome
@@ -46,6 +51,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let topStripHost = ChromeView(fill: .none)
     private var topStripHeight: NSLayoutConstraint!
     private let terminalHost = ChromeView(fill: .none)
+    private let diffPanel = DiffPanelView()
+    private let diffSplitter = SidebarSplitterView()
+    private var diffWidth: NSLayoutConstraint!
+    private var diffButton: ChipButton!
+    /// The repository the title-bar counts describe. git answers off the main
+    /// thread, so a reply that lands after the session has moved on has to be
+    /// recognised and dropped.
+    private var totalsRepo: String?
+    /// The directory the button was last resolved for, so a working-directory
+    /// report that did not actually move does not run git again.
+    private var diffButtonCwd: String?
+    private var diffTotals = (added: 0, removed: 0)
     private let sessionList = SessionListView()
     private let sessionStrip = SessionListView()
     private let emptyState = ChromeView(fill: .none)
@@ -199,6 +216,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             }
         }
 
+        // ZHARP_TEST_DIFF=1 opens the changes panel through the real shortcut
+        // path and reports the repository it found.
+        if ProcessInfo.processInfo.environment["ZHARP_TEST_DIFF"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                self?.exerciseDiffForTesting()
+            }
+        }
+
         // ZHARP_DEBUG_LAYOUT=1 dumps the chrome's geometry a moment after
         // launch - a blank window is otherwise indistinguishable from a
         // correctly drawn one in a screenshot.
@@ -219,6 +244,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 f("sidebarHost", self.sidebarHost)
                 f("sidebarFooter", self.sidebarFooter)
                 f("terminalHost", self.terminalHost)
+                f("diffPanel", self.diffPanel)
+                f("diffSplitter", self.diffSplitter)
+                f("diffButton", self.diffButton)
                 f("activeView", self.active?.view)
             }
         }
@@ -247,11 +275,23 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         leftButtons.translatesAutoresizingMaskIntoConstraints = false
         titleBar.addSubview(leftButtons)
 
+        // Hidden until a session proves it is standing in a repository.
+        diffButton = ChipButton(glyph: Icons.fileDiff)
+        diffButton.isHidden = true
+        diffButton.toolTip = "Changes"
+        diffButton.onClick = { [weak self] in self?.toggleDiff() }
+
         updateBadge = UpdateBadgeButton()
         updateBadge.isHidden = true
         updateBadge.toolTip = "A new version of Zharp is available"
         updateBadge.onClick = { [weak self] in self?.showUpdatePage() }
-        titleBar.addSubview(updateBadge)
+
+        let rightButtons = NSStackView(views: [diffButton, updateBadge])
+        rightButtons.orientation = .horizontal
+        rightButtons.spacing = 8
+        rightButtons.alignment = .centerY
+        rightButtons.translatesAutoresizingMaskIntoConstraints = false
+        titleBar.addSubview(rightButtons)
 
         titleBarHeight = titleBar.heightAnchor.constraint(equalToConstant: 34)
         NSLayoutConstraint.activate([
@@ -264,10 +304,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             // starts just after them and keeps the same left-to-right order.
             leftButtons.leadingAnchor.constraint(equalTo: titleBar.leadingAnchor, constant: 78),
             leftButtons.centerYAnchor.constraint(equalTo: titleBar.centerYAnchor),
-            updateBadge.trailingAnchor.constraint(equalTo: titleBar.trailingAnchor, constant: -12),
-            updateBadge.centerYAnchor.constraint(equalTo: titleBar.centerYAnchor),
-            updateBadge.leadingAnchor.constraint(greaterThanOrEqualTo: leftButtons.trailingAnchor,
-                                                 constant: 12),
+            rightButtons.trailingAnchor.constraint(equalTo: titleBar.trailingAnchor, constant: -12),
+            rightButtons.centerYAnchor.constraint(equalTo: titleBar.centerYAnchor),
+            rightButtons.leadingAnchor.constraint(greaterThanOrEqualTo: leftButtons.trailingAnchor,
+                                                  constant: 12),
         ])
     }
 
@@ -349,10 +389,29 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         terminalHost.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(terminalHost)
 
+        // The changes panel is built with the rest of the chrome rather than on
+        // first open: hidden it costs a view tree and nothing else, since its
+        // git poll only runs while it is actually on screen.
+        diffPanel.isHidden = true
+        diffPanel.onClose = { [weak self] in self?.toggleDiff() }
+        diffPanel.onTotalsChanged = { [weak self] added, removed in
+            // While the panel is open its own poll has the freshest numbers, so
+            // the title bar takes them from here instead of running git twice.
+            self?.applyDiffTotals(added, removed)
+        }
+        root.addSubview(diffPanel)
+
+        diffSplitter.translatesAutoresizingMaskIntoConstraints = false
+        diffSplitter.isHidden = true
+        diffSplitter.onDrag = { [weak self] delta in self?.dragDiff(by: delta) }
+        diffSplitter.onDragEnded = { [weak self] in self?.persistDiffWidth() }
+        root.addSubview(diffSplitter)
+
         buildEmptyState()
 
         sidebarWidth = sidebarHost.widthAnchor.constraint(equalToConstant: 230)
         topStripHeight = topStripHost.heightAnchor.constraint(equalToConstant: 0)
+        diffWidth = diffPanel.widthAnchor.constraint(equalToConstant: 0)
 
         NSLayoutConstraint.activate([
             sidebarHost.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -393,10 +452,27 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                                                         constant: -6),
             newTabStripButton.centerYAnchor.constraint(equalTo: topStripHost.centerYAnchor),
 
+            // The terminal ends where the changes panel starts. Closed, the
+            // panel is zero wide and this is the same as pinning to the root
+            // edge; there is no repositioning to do beyond that, because the
+            // active session is a real subview of terminalHost and reflows its
+            // own pty when the host resizes.
             terminalHost.leadingAnchor.constraint(equalTo: sidebarHost.trailingAnchor),
-            terminalHost.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            terminalHost.trailingAnchor.constraint(equalTo: diffPanel.leadingAnchor),
             terminalHost.topAnchor.constraint(equalTo: topStripHost.bottomAnchor),
             terminalHost.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+
+            // Below the top strip, so the panel covers exactly the terminal's
+            // vertical extent and the tab strip still spans the window.
+            diffPanel.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            diffPanel.topAnchor.constraint(equalTo: topStripHost.bottomAnchor),
+            diffPanel.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            diffWidth,
+
+            diffSplitter.trailingAnchor.constraint(equalTo: diffPanel.leadingAnchor, constant: 3),
+            diffSplitter.widthAnchor.constraint(equalToConstant: Self.splitterGrip),
+            diffSplitter.topAnchor.constraint(equalTo: diffPanel.topAnchor),
+            diffSplitter.bottomAnchor.constraint(equalTo: diffPanel.bottomAnchor),
         ])
     }
 
@@ -638,6 +714,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             guard let self else { return nil }
             return Shortcuts.binding(self.settings, actionId)
         }
+        watchForChanges(item)
         item.setUiZoom(settings.uiZoom)
         item.view?.setUiZoom(settings.uiZoom)
         item.view?.setPalette(terminalPalette)
@@ -688,6 +765,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             self?.sessionList.refreshLabels()
             self?.sessionStrip.refreshLabels()
         }
+        watchForChanges(item)
 
         session.exited = { [weak self] _ in
             DispatchQueue.main.async { self?.closeTab(item) }
@@ -821,6 +899,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
         sessionList.setSelected(nil)
         sessionStrip.setSelected(nil)
+        // No session means no directory: nothing for the panel to be about.
+        applyDiffStateForActive()
+        updateDiffButton()
     }
 
     func activate(_ item: SessionItem) {
@@ -850,6 +931,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
         sessionList.setSelected(item)
         sessionStrip.setSelected(item)
+
+        applyDiffStateForActive()
+        updateDiffButton()
     }
 
     private func cycleSession(_ direction: Int) {
@@ -891,6 +975,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let stripShown = !sidebar && tabsVisible
         topStripHost.isHidden = !stripShown
         topStripHeight.constant = stripShown ? 34 * zoom : 0
+
+        // Showing or hiding the sidebar moves what is left for the panel.
+        clampDiffWidth()
     }
 
     private func maxSidebarWidth() -> CGFloat {
@@ -949,6 +1036,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         sessionList.zoom = zoom
         sessionStrip.zoom = zoom
         settingsView?.setZoom(zoom)
+        diffButton?.setMetrics(side: 28 * z, glyphSize: 18 * z)
+        diffPanel.setUiZoom(zoom)
+        applyDiffTotals(diffTotals.added, diffTotals.removed)
 
         for item in sessions {
             item.view?.setUiZoom(zoom)
@@ -957,6 +1047,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
         applyTabLayout()
         clampSidebarWidth()
+        clampDiffWidth()
         refreshVisibleSessions()
     }
 
@@ -982,6 +1073,227 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                                      showPath: settings.sidebarShowPath)
         }
         refreshVisibleSessions()
+    }
+
+    // ---------------------------------------------------------------- changes panel
+
+    private var isDiffOpen: Bool { !diffPanel.isHidden }
+
+    /// The directory the panel and the button follow.
+    ///
+    /// Deliberately no fallback to some other session's directory: with one,
+    /// the changes button turned up on the Settings page reporting a repository
+    /// the visible page has nothing to do with.
+    private func lastTerminalDirectory() -> String? {
+        active?.session?.workingDirectory
+    }
+
+    private func toggleDiff() {
+        if isDiffOpen {
+            active?.diffOpen = false
+            closeDiffPanel()
+            return
+        }
+        // The Settings page has no working directory, so it has no repository.
+        guard let active, !active.isSettings else { return }
+        active.diffOpen = true
+        openDiffPanel()
+    }
+
+    /// The one way in, for both the button and a tab switch, so both routes end
+    /// up in the same state.
+    private func openDiffPanel() {
+        let ceiling = maxDiffWidth()
+        // Under this there is no panel worth showing, only a sliver that would
+        // take the terminal's width for nothing.
+        if ceiling < 120 { return }
+
+        let zoom = CGFloat(settings.uiZoom)
+        diffWidth.constant = Swift.min(Swift.max(CGFloat(settings.diffPanelWidth) * zoom,
+                                                 Swift.min(Self.minDiffWidth * zoom, ceiling)),
+                                       ceiling)
+        // Pointed at the directory BEFORE it is shown: unhiding is what starts
+        // the panel's own refresh, and it should not spend its first tick
+        // reading whatever repository it was left on.
+        diffPanel.setWorkingDirectory(lastTerminalDirectory())
+        diffPanel.isHidden = false
+        diffSplitter.isHidden = false
+        diffButton.isHidden = false
+    }
+
+    /// Leaves the button alone: it is also the way back in, and the only way to
+    /// close a panel that has been opened.
+    private func closeDiffPanel() {
+        diffWidth.constant = 0
+        diffPanel.isHidden = true
+        diffSplitter.isHidden = true
+    }
+
+    /// Runs synchronously on every tab switch, before any git call, so the panel
+    /// never flashes the previous session's repository on its way to this one.
+    private func applyDiffStateForActive() {
+        guard let active, !active.isSettings, active.diffOpen else {
+            if isDiffOpen { closeDiffPanel() }
+            return
+        }
+        if isDiffOpen {
+            diffPanel.setWorkingDirectory(lastTerminalDirectory())
+            return
+        }
+        openDiffPanel()
+    }
+
+    private func maxDiffWidth() -> CGFloat {
+        let rootWidth = root.bounds.width > 0 ? root.bounds.width : 1280
+        return Swift.max(0, rootWidth - sidebarWidth.constant
+                            - Self.minTerminalWidth - Self.splitterGrip)
+    }
+
+    /// The panel is anchored to the right edge, so dragging the grip LEFT is
+    /// what widens it: the opposite sign from the sidebar's.
+    private func dragDiff(by delta: CGFloat) {
+        let zoom = CGFloat(settings.uiZoom)
+        let ceiling = maxDiffWidth()
+        diffWidth.constant = Swift.min(Swift.max(diffWidth.constant - delta,
+                                                 Swift.min(Self.minDiffWidth * zoom, ceiling)),
+                                       Swift.max(ceiling, 1))
+    }
+
+    private func persistDiffWidth() {
+        // Stored width is zoom-independent (logical), like the sidebar's. Saved
+        // on release rather than on every drag frame.
+        settings.diffPanelWidth = Double(diffWidth.constant / CGFloat(settings.uiZoom))
+        settings.save()
+    }
+
+    private func clampDiffWidth() {
+        if !isDiffOpen { return }
+        let zoom = CGFloat(settings.uiZoom)
+        let ceiling = maxDiffWidth()
+        let clamped = Swift.min(Swift.max(diffWidth.constant,
+                                          Swift.min(Self.minDiffWidth * zoom, ceiling)),
+                                Swift.max(ceiling, 0))
+        if abs(clamped - diffWidth.constant) > 0.5 {
+            diffWidth.constant = clamped
+        }
+    }
+
+    /// Follows the active session in and out of repositories: whether the title
+    /// bar carries a changes button at all is a property of where the prompt is
+    /// standing.
+    ///
+    /// The panel is never closed from here. Whether it is open is the user's
+    /// decision, and switching session, or stepping into a directory that is not
+    /// a repository, is not them changing it. The panel says "not a git
+    /// repository" for itself.
+    private func updateDiffButton() {
+        let cwd = lastTerminalDirectory()
+        if (diffButtonCwd ?? "").caseInsensitiveCompare(cwd ?? "") == .orderedSame { return }
+        diffButtonCwd = cwd
+
+        guard let active, !active.isSettings else {
+            diffButton.isHidden = true
+            totalsRepo = nil
+            applyDiffTotals(0, 0)
+            return
+        }
+
+        Task { @MainActor in
+            let repo = await GitStatus.discoverRepo(cwd)
+            // The prompt may have moved on while git was answering. Whoever
+            // asked last owns the button.
+            guard (self.diffButtonCwd ?? "").caseInsensitiveCompare(cwd ?? "")
+                    == .orderedSame else { return }
+
+            // The button stays while the panel is open even outside a
+            // repository, because hiding it would strand the panel with no way
+            // to dismiss it.
+            self.diffButton.isHidden = repo == nil && !self.isDiffOpen
+            self.totalsRepo = repo
+            if self.isDiffOpen { self.diffPanel.setWorkingDirectory(cwd) }
+
+            guard let repo else {
+                self.applyDiffTotals(0, 0)
+                return
+            }
+            await self.readDiffTotals(repo)
+        }
+    }
+
+    /// Re-reads what changed without re-resolving the repository, for when a
+    /// command finishes in a directory that has not moved.
+    private func refreshDiffTotals() {
+        // The panel's own poll would get here within a couple of seconds, but a
+        // command that just wrote to the tree is exactly the moment to look.
+        if isDiffOpen { diffPanel.refresh(quiet: true) }
+        guard let repo = totalsRepo else { return }
+        Task { @MainActor in await self.readDiffTotals(repo) }
+    }
+
+    /// The whole repository's totals, read here rather than taken from the
+    /// panel: the button is live whether or not the panel has ever been opened,
+    /// so this has to work with nothing on screen.
+    @MainActor
+    private func readDiffTotals(_ repo: String) async {
+        var added = 0
+        var removed = 0
+        for counts in await GitStatus.counts(repoRoot: repo).values {
+            added += counts.added
+            removed += counts.removed
+        }
+        // numstat says nothing about untracked files: git has nothing to compare
+        // them against, so their whole content is counted directly.
+        for change in await GitStatus.changes(repoRoot: repo) where change.kind == .untracked {
+            added += await GitStatus.countUntracked(repoRoot: repo, path: change.path)
+        }
+        guard totalsRepo == repo else { return }
+        applyDiffTotals(added, removed)
+    }
+
+    /// Paints the counts onto the chip in the terminal palette's own green and
+    /// red (ANSI 2 and 1), so the title bar agrees with the panel and both
+    /// follow the theme.
+    private func applyDiffTotals(_ added: Int, _ removed: Int) {
+        diffTotals = (added, removed)
+        let any = added > 0 || removed > 0
+        diffButton.toolTip = any ? "Changes  +\(added) -\(removed)" : "Changes"
+
+        guard any else {
+            diffButton.label = nil
+            return
+        }
+        let font = NSFont.systemFont(ofSize: 11.5 * CGFloat(settings.uiZoom))
+        let text = NSMutableAttributedString()
+        if added > 0 {
+            text.append(NSAttributedString(string: "+\(added)", attributes: [
+                .font: font,
+                .foregroundColor: ChromeColors.rgb(terminalPalette.colors[2], alpha: 1),
+            ]))
+        }
+        if removed > 0 {
+            text.append(NSAttributedString(string: added > 0 ? " -\(removed)" : "-\(removed)",
+                                           attributes: [
+                .font: font,
+                .foregroundColor: ChromeColors.rgb(terminalPalette.colors[1], alpha: 1),
+            ]))
+        }
+        diffButton.label = text
+    }
+
+    /// A session reports where it is and when it has finished a command, and
+    /// both change what the panel should be showing. OSC 7 and OSC 133 already
+    /// carry them, so nothing here polls.
+    private func watchForChanges(_ item: SessionItem) {
+        item.directoryChanged = { [weak self, weak item] _ in
+            guard let self, let item, self.active === item else { return }
+            self.updateDiffButton()
+        }
+        item.commandFinished = { [weak self, weak item] in
+            guard let self, let item, self.active === item else { return }
+            // A command can change the tree without moving the prompt, which is
+            // the one case updateDiffButton() has nothing to say about.
+            self.refreshDiffTotals()
+        }
     }
 
     // ---------------------------------------------------------------- settings page
@@ -1067,6 +1379,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         for item in sessions {
             item.view?.setPalette(terminalPalette)
         }
+        // The panel reads as the same surface as the terminal, so it follows the
+        // terminal's font as well as its colours. Both windows that share a
+        // settings change come through here.
+        diffPanel.setPalette(terminalPalette)
+        diffPanel.setFontFamily(settings.fontFamily)
 
         ChromeRefresh.apply(to: root)
         refreshBrandFooter()
@@ -1074,6 +1391,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         searchOverlay?.refreshChrome()
         onboardingOverlay?.refreshChrome()
         settingsView?.refreshChrome()
+        // After the walk: it re-resolves every label against the chrome text
+        // colour, which is wrong for anything the palette owns.
+        diffPanel.refreshChrome()
+        diffButton?.refreshChrome()
+        applyDiffTotals(diffTotals.added, diffTotals.removed)
         refreshVisibleSessions()
     }
 
@@ -1163,6 +1485,32 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+
+    /// Opens the changes panel the way the shortcut does, reports what it found,
+    /// then proves the open state belongs to the session rather than the window:
+    /// a new tab should not inherit it, and going back should restore it.
+    private func exerciseDiffForTesting() {
+        let opened = active
+        performShortcut("openDiff")
+        App.log("TEST diff open=\(isDiffOpen) width=\(diffWidth.constant) "
+                + "button=\(!diffButton.isHidden) cwd=\(lastTerminalDirectory() ?? "-")")
+
+        // git runs off the main thread, so the panel has nothing to say yet.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self else { return }
+            App.log("TEST diff totals=+\(self.diffTotals.added)/-\(self.diffTotals.removed)")
+            App.log(self.diffPanel.debugState())
+
+            self.addTab()
+            App.log("TEST diff on new tab: open=\(self.isDiffOpen) "
+                    + "flag=\(self.active?.diffOpen == true)")
+
+            guard let opened else { return }
+            self.activate(opened)
+            App.log("TEST diff back on first tab: open=\(self.isDiffOpen) "
+                    + "width=\(self.diffWidth.constant)")
+        }
+    }
 
     /// Drives the block features from code so they can be checked without a
     /// pointer: collapse, highlight, find and jump.
@@ -1401,6 +1749,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         case "prevTab": cycleSession(-1)
         case "toggleSidebar": toggleSidebar()
         case "openSettings": openSettings()
+        case "openDiff": toggleDiff()
         case "toggleSearch": toggleSearchOverlay()
         case "zoomIn": changeUiZoom(+1)
         case "zoomOut": changeUiZoom(-1)
@@ -1488,6 +1837,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             ?? sessions.last { !$0.isSettings }
         sessionList.dragController?.cancel()
         sessionStrip.dragController?.cancel()
+        // Closing a window does not take its views out of it, so the panel would
+        // otherwise keep running git for a window nobody can see.
+        closeDiffPanel()
         if let dir = lastTerminal?.session?.workingDirectory, !dir.isEmpty {
             settings.lastClosedDirectory = dir
         }
@@ -1516,6 +1868,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     func windowDidResize(_ notification: Notification) {
         clampSidebarWidth()
+        clampDiffWidth()
     }
 }
 
