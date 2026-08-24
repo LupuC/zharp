@@ -141,6 +141,10 @@ public sealed class AppSettings
     [JsonPropertyName("sidebarWidth")]
     public double SidebarWidth { get; set; } = 230;
 
+    /// <summary>Width of the changes panel when it is open, before UI zoom.</summary>
+    [JsonPropertyName("diffPanelWidth")]
+    public double DiffPanelWidth { get; set; } = 460;
+
     /// <summary>Rebindable shortcuts: action id → "Ctrl+Shift+T"-style binding.</summary>
     [JsonPropertyName("keybindings")]
     public Dictionary<string, string> Keybindings { get; set; } = new();

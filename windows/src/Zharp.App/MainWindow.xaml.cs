@@ -47,6 +47,7 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         App.Windows.Add(this);
+        StartDiffPolling();
         Activated += (_, _) => App.Main = this;
 
         Title = "Zharp";
@@ -374,6 +375,11 @@ public sealed partial class MainWindow : Window
             _blockBindings.TryGetValue((vk, mods), out string? actionId) ? actionId : null;
         view.BlockShortcutText = actionId => Shortcuts.GetBinding(_settings, actionId);
         var item = new SessionItem(session, view, shell.DisplayName, DispatcherQueue, shellId);
+
+        // cd'ing into or out of a repository decides whether the title bar
+        // carries a diff button at all, so the button follows the prompt.
+        session.WorkingDirectoryChanged += _ =>
+            DispatcherQueue.TryEnqueue(UpdateDiffButtonAsync);
         item.ApplyDisplayOptions(_settings.SidebarTitleIsCwd, _settings.SidebarShowPath);
         item.SetUiZoom(_settings.UiZoom);
 
@@ -656,7 +662,9 @@ public sealed partial class MainWindow : Window
         SessionStrip.SelectedItem = SessionList.SelectedItem;
         _suppressSelection = false;
 
+        ApplyDiffStateForActive();
         DispatcherQueue.TryEnqueue(UpdateTerminalLayerLayout);
+        UpdateDiffButtonAsync();
     }
 
     /// <summary>
@@ -914,6 +922,356 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void OnDiffClick(object sender, RoutedEventArgs e) => ToggleDiff();
+
+    /// <summary>
+    /// Shows or hides the changes panel beside the terminal.
+    ///
+    /// A split rather than a tab, because a diff is something you read WHILE
+    /// working: as a session it replaced the terminal you were comparing it
+    /// against, which is the one thing you wanted to keep looking at.
+    ///
+    /// The terminal needs no repositioning code here. It lives in TerminalLayer
+    /// and is placed from TerminalHost's bounds on every LayoutUpdated, so
+    /// narrowing the column moves it on its own.
+    /// </summary>
+    private void ToggleDiff()
+    {
+        if (DiffPanel.Visibility == Visibility.Visible)
+        {
+            if (_active != null)
+                _active.DiffOpen = false;
+            CloseDiffPanel();
+            return;
+        }
+
+        // A page like Settings has no directory and no repository, so there is
+        // nothing for it to show a diff of.
+        if (_active?.Session == null)
+            return;
+
+        _active.DiffOpen = true;
+        OpenDiffPanel();
+    }
+
+    /// <summary>
+    /// Puts the panel on screen. Shared by the button and by switching to a
+    /// session that already had it open, so both routes behave identically.
+    /// </summary>
+    private void OpenDiffPanel()
+    {
+        try
+        {
+            if (_diffView == null)
+            {
+                _diffView = new DiffView();
+                _diffView.SetPalette(_terminalPalette);
+                _diffView.SetFontFamily(_settings.FontFamily);
+                DiffPanel.Children.Add(_diffView);
+                _diffView.Loaded += (_, _) => _diffView!.SetUiZoom(_settings.UiZoom);
+            }
+
+            // Math.Clamp throws when min exceeds max, and on a window narrow
+            // enough that the terminal floor eats the preferred minimum, it
+            // does. Take whatever room there is instead of refusing to open.
+            double max = MaxDiffWidth();
+            if (max < 120)
+                return; // nothing worth showing
+            double width = Math.Clamp(
+                _settings.DiffPanelWidth * _settings.UiZoom, Math.Min(MinDiffWidth, max), max);
+
+            DiffColumn.Width = new GridLength(width);
+            DiffSplitterColumn.Width = new GridLength(SplitterGrip);
+            DiffPanel.Visibility = Visibility.Visible;
+            DiffResizer.Visibility = Visibility.Visible;
+            DiffButton.Visibility = Visibility.Visible;
+            _diffView.SetUiZoom(_settings.UiZoom);
+
+            _ = _diffView.SetWorkingDirectoryAsync(LastTerminalDirectory());
+            DispatcherQueue.TryEnqueue(UpdateTerminalLayerLayout);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Opening changes failed: {ex}");
+        }
+    }
+
+    /// <summary>
+    /// Shows or hides the panel to match the session being switched to.
+    ///
+    /// Runs synchronously during the switch, before any git call, so the panel
+    /// never flashes the previous session's state on the way in.
+    /// </summary>
+    private void ApplyDiffStateForActive()
+    {
+        bool shouldOpen = _active is { Session: not null, DiffOpen: true };
+
+        if (!shouldOpen)
+        {
+            if (DiffPanel.Visibility == Visibility.Visible)
+                CloseDiffPanel();
+            return;
+        }
+
+        if (DiffPanel.Visibility == Visibility.Visible)
+            return; // already open, nothing to do
+
+        OpenDiffPanel();
+    }
+
+    private void CloseDiffPanel()
+    {
+        DiffColumn.Width = new GridLength(0);
+        DiffSplitterColumn.Width = new GridLength(0);
+        DiffPanel.Visibility = Visibility.Collapsed;
+        DiffResizer.Visibility = Visibility.Collapsed;
+        DispatcherQueue.TryEnqueue(UpdateTerminalLayerLayout);
+    }
+
+    /// <summary>
+    /// Paints the working tree's totals onto the title bar button, so the
+    /// state is readable without opening the panel.
+    /// </summary>
+    private void OnDiffTotalsChanged(int added, int removed)
+    {
+        _dispatcherQueueSafe(() =>
+        {
+            bool any = added > 0 || removed > 0;
+            DiffCounts.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+            DiffPlus.Text = added > 0 ? $"+{added}" : "";
+            DiffMinus.Text = removed > 0 ? (added > 0 ? $" -{removed}" : $"-{removed}") : "";
+
+            // Same greens and reds the diff itself uses: ANSI 2 and 1 from the
+            // active palette, so the title bar agrees with the panel and both
+            // follow the theme.
+            DiffPlus.Foreground = PaletteBrush(2);
+            DiffMinus.Foreground = PaletteBrush(1);
+            DiffButton.SetValue(ToolTipService.ToolTipProperty,
+                any ? $"Changes  +{added} -{removed}" : "Changes");
+        });
+    }
+
+    /// <summary>A brush for one ANSI slot of the active terminal palette.</summary>
+    private SolidColorBrush PaletteBrush(int ansiIndex)
+    {
+        uint rgb = _terminalPalette.Colors[ansiIndex];
+        return new SolidColorBrush(Windows.UI.Color.FromArgb(
+            0xFF, (byte)((rgb >> 16) & 0xFF), (byte)((rgb >> 8) & 0xFF), (byte)(rgb & 0xFF)));
+    }
+
+    private void _dispatcherQueueSafe(Action action)
+    {
+        if (DispatcherQueue.HasThreadAccess)
+            action();
+        else
+            DispatcherQueue.TryEnqueue(() => action());
+    }
+
+    /// <summary>
+    /// Keeps the diff panel inside what the window can spare. Without this a
+    /// panel opened wide on a maximised window keeps its pixel width as the
+    /// window narrows, and the terminal is squeezed out from the left.
+    /// </summary>
+    private void OnTerminalSplitSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (DiffPanel.Visibility != Visibility.Visible)
+            return;
+        double max = MaxDiffWidth();
+        if (DiffColumn.Width.Value > max)
+            DiffColumn.Width = new GridLength(max);
+    }
+
+    private const double MinDiffWidth = 320;
+    private const double SplitterGrip = 6;
+
+    /// <summary>Never let the panel squeeze the terminal below a usable width.</summary>
+    private const double MinTerminalWidth = 240;
+
+    private double MaxDiffWidth() =>
+        Math.Max(0, TerminalSplit.ActualWidth - MinTerminalWidth - SplitterGrip);
+
+    /// <summary>
+    /// The active terminal's working directory, or null when the active
+    /// session is a page like Settings.
+    ///
+    /// It deliberately does NOT fall back to some other session's directory.
+    /// Doing so made the changes button appear on the Settings page, reporting
+    /// a repository the visible page has nothing to do with.
+    /// </summary>
+    private string? LastTerminalDirectory() => _active?.Session?.WorkingDirectory;
+
+    /// <summary>
+    /// Shows the title bar diff button only while the active session sits
+    /// inside a git repository, and keeps an open panel pointed at it.
+    /// </summary>
+    private async void UpdateDiffButtonAsync()
+    {
+        try
+        {
+            string? cwd = LastTerminalDirectory();
+            if (string.Equals(cwd, _diffButtonCwd, StringComparison.OrdinalIgnoreCase))
+                return;
+            _diffButtonCwd = cwd;
+
+            string? repo = await GitStatus.DiscoverRepoAsync(cwd);
+
+            // The directory may have moved on while git was answering; the
+            // later call owns the button.
+            if (!string.Equals(cwd, _diffButtonCwd, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            bool onPage = _active?.Session == null;
+            bool panelOpen = DiffPanel.Visibility == Visibility.Visible;
+
+            if (onPage)
+            {
+                // Settings and friends have no working directory. Showing a
+                // repository's button and totals over them claimed a state
+                // that had nothing to do with what was on screen.
+                DiffButton.Visibility = Visibility.Collapsed;
+                _diffPoll.Stop();
+                return;
+            }
+
+            // The button stays while the panel is open even outside a
+            // repository, because it is also the way to close the panel and
+            // hiding it would strand the panel with no way to dismiss it.
+            DiffButton.Visibility = repo == null && !panelOpen
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+
+            if (repo == null)
+            {
+                _diffPoll.Stop();
+                OnDiffTotalsChanged(0, 0);
+            }
+            else
+            {
+                // Totals as soon as the repository is known, without waiting
+                // for the panel to be opened: the button is the thing most
+                // often looked at, and it used to sit blank until first click.
+                await RefreshTotalsAsync(repo);
+                _diffPoll.Start();
+            }
+
+            // The panel is never closed from here. Whether it is open is the
+            // user's decision, and switching session, or stepping into a
+            // directory that is not a repository, is not them changing it.
+            // The panel says "not a git repository" for itself; closing it
+            // meant coming back to that session found it gone.
+            if (panelOpen && _diffView != null)
+                await _diffView.SetWorkingDirectoryAsync(cwd);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"diff button: {ex.Message}");
+        }
+    }
+
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer _diffPoll = null!;
+    private string? _totalsRepo;
+
+    /// <summary>
+    /// Keeps the title bar totals current while a repository is open, whether
+    /// or not the panel is showing. Three seconds is slow enough that git is
+    /// not being run constantly and fast enough that saving a file in an editor
+    /// is reflected before you look away.
+    /// </summary>
+    private void StartDiffPolling()
+    {
+        _diffPoll = DispatcherQueue.CreateTimer();
+        _diffPoll.Interval = TimeSpan.FromSeconds(3);
+        _diffPoll.IsRepeating = true;
+        _diffPoll.Tick += async (_, _) =>
+        {
+            if (_totalsRepo is { } repo)
+                await RefreshTotalsAsync(repo);
+        };
+    }
+
+    /// <summary>
+    /// Reads the whole working tree's added and removed totals.
+    ///
+    /// One `git diff --numstat` covers every tracked change. Untracked files
+    /// are counted from their own line count, because git has nothing to
+    /// compare them against and asking it per file would undo the single-call
+    /// saving entirely.
+    /// </summary>
+    private async Task RefreshTotalsAsync(string repo)
+    {
+        try
+        {
+            _totalsRepo = repo;
+
+            var numstat = await GitStatus.NumstatAsync(repo);
+            int added = 0, removed = 0;
+            foreach (var (a, r) in numstat.Values)
+            {
+                added += a;
+                removed += r;
+            }
+
+            foreach (var change in await GitStatus.StatusAsync(repo))
+            {
+                if (change.Kind == GitChangeKind.Untracked)
+                    added += await GitStatus.CountUntrackedAsync(repo, change.Path);
+            }
+
+            // The directory may have moved on while git was answering.
+            if (_totalsRepo == repo)
+                OnDiffTotalsChanged(added, removed);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"diff totals: {ex.Message}");
+        }
+    }
+
+    // ------------------------------------------------- diff panel resize grip
+
+    private bool _resizingDiff;
+    private double _diffStartX;
+    private double _diffStartWidth;
+
+    private void OnDiffSplitterPressed(object sender, PointerRoutedEventArgs e)
+    {
+        _resizingDiff = true;
+        _diffStartX = e.GetCurrentPoint(Root).Position.X;
+        _diffStartWidth = DiffColumn.ActualWidth;
+        ((UIElement)sender).CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+
+    private void OnDiffSplitterMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_resizingDiff)
+            return;
+        double x = e.GetCurrentPoint(Root).Position.X;
+        // Dragging left widens the panel: it is anchored to the right edge.
+        double max = MaxDiffWidth();
+        double width = Math.Clamp(
+            _diffStartWidth - (x - _diffStartX), Math.Min(MinDiffWidth, max), Math.Max(max, 1));
+        DiffColumn.Width = new GridLength(width);
+        e.Handled = true;
+    }
+
+    private void OnDiffSplitterReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_resizingDiff)
+            return;
+        _resizingDiff = false;
+        ((UIElement)sender).ReleasePointerCapture(e.Pointer);
+        // Stored width is zoom-independent, matching the sidebar's.
+        _settings.DiffPanelWidth = DiffColumn.ActualWidth / _settings.UiZoom;
+        _settings.Save();
+        e.Handled = true;
+    }
+
+    private void OnDiffSplitterCaptureLost(object sender, PointerRoutedEventArgs e) => _resizingDiff = false;
+
+    private DiffView? _diffView;
+    private string? _diffButtonCwd;
+
     private string? _currentBackdrop;
 
     /// <summary>Applies the color theme, backdrop material and background opacity.</summary>
@@ -932,6 +1290,8 @@ public sealed partial class MainWindow : Window
         {
             item.View?.SetPalette(_terminalPalette);
         }
+        _diffView?.SetPalette(_terminalPalette);
+        _diffView?.SetFontFamily(_settings.FontFamily);
 
         SetWin32BackgroundBrush(_terminalPalette.DefaultBackground);
 
@@ -1900,6 +2260,7 @@ public sealed partial class MainWindow : Window
             case "prevTab": CycleSession(-1); break;
             case "toggleSidebar": ToggleSidebar(); break;
             case "openSettings": OpenSettings(); break;
+            case "openDiff": ToggleDiff(); break;
             case "toggleSearch": ToggleSearchOverlay(); break;
             case "zoomIn": ChangeUiZoom(+1); break;
             case "zoomOut": ChangeUiZoom(-1); break;
