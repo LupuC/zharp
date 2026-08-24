@@ -5,7 +5,7 @@
 ; Output: installer\Output\ZharpSetup-<version>.exe
 
 #define MyAppName "Zharp"
-#define MyAppVersion "0.16.0" /* x-release-please-version */
+#define MyAppVersion "0.17.0" /* x-release-please-version */
 #define MyAppPublisher "Zharp"
 #define MyAppExeName "Zharp.exe"
 #define PublishDir "..\src\Zharp.App\bin\pub\Release\net10.0-windows10.0.22621.0\win-x64\publish"
