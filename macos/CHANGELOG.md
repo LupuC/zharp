@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/LupuC/zharp/compare/macos-v0.18.0...macos-v0.19.0) (2026-08-24)
+
+
+### Features
+
+* show what changed in the repository beside the terminal ([#15](https://github.com/LupuC/zharp/issues/15)) ([31afce6](https://github.com/LupuC/zharp/commit/31afce63a27597b1c8ecf1a70604c17e815b7e54))
+
 ## [0.18.0](https://github.com/LupuC/zharp/compare/macos-v0.17.0...macos-v0.18.0) (2026-08-24)
 
 
