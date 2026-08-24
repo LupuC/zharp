@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.1](https://github.com/LupuC/zharp/compare/macos-v0.19.0...macos-v0.19.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* **macos:** stop faded labels drawing outside their own frame ([#17](https://github.com/LupuC/zharp/issues/17)) ([bb8a5f9](https://github.com/LupuC/zharp/commit/bb8a5f9c19a148f87fe6008a5cbb960a5103a42c))
+
 ## [0.19.0](https://github.com/LupuC/zharp/compare/macos-v0.18.0...macos-v0.19.0) (2026-08-24)
 
 
