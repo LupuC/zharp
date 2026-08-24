@@ -1,0 +1,111 @@
+name: Version line
+
+# ============================================================================
+# Zharp's version has two halves that mean different things.
+#
+#   0.16   the LINE. Every platform is on it. It moves when a feature ships,
+#          and it moves for all platforms at once.
+#   .2     the PATCH. It belongs to one platform's own bug fixes. Windows can
+#          be on 0.16.2 while macOS is still on 0.16.0, and that is correct:
+#          macOS had nothing to fix, so it was never rebuilt.
+#
+# release-please cannot express that on its own. Its linked-versions plugin
+# syncs the whole version, patch included, which is what this repository used
+# to do: a Windows-only fix dragged macOS to the same number and rebuilt a disk
+# image whose only difference was the version string. Removing the plugin frees
+# the patch, but it frees the minor with it, because release-please assigns
+# commits to components by path and a `feat:` touching only macos/ would bump
+# macOS to 0.17.0 and leave Windows behind.
+#
+# That is the failure this whole repository exists to prevent. macOS reached
+# 0.3.0 while Windows was on 0.14.0 in the two-repository days, and nobody
+# noticed, because nothing was watching. This job watches.
+#
+# It fails a pull request whose two version.txt files disagree on major.minor.
+# The patches are ignored on purpose: they are meant to differ.
+# ============================================================================
+
+on:
+  pull_request:
+
+concurrency:
+  group: version-line-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version-line:
+    name: version-line
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Every platform is on the same line
+        run: |
+          set -euo pipefail
+
+          status=0
+
+          # Add a platform here when it starts shipping. linux/ has no
+          # version.txt yet because it has no code; leaving it out is the
+          # difference between "not released" and "released and behind".
+          platforms="windows macos"
+
+          # Read inline rather than through a function: a function called as
+          # $(...) runs in a subshell, so a `status=1` set inside it would be
+          # thrown away with the subshell and a malformed version would pass.
+          lines=""
+          for p in $platforms; do
+            file="$p/version.txt"
+
+            if [ ! -f "$file" ]; then
+              echo "::error::$file is missing. Every shipping platform needs one."
+              status=1
+              continue
+            fi
+
+            v=$(tr -d '[:space:]' < "$file")
+
+            # Three numeric parts, nothing else. A malformed version here
+            # reaches the installer filename and the release tag.
+            if ! printf '%s' "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::$file reads '$v', which is not a MAJOR.MINOR.PATCH version."
+              status=1
+              continue
+            fi
+
+            # Strip the patch: 0.16.2 -> 0.16
+            line="${v%.*}"
+            printf '  %-8s %-10s line %s\n' "$p" "$v" "$line"
+            lines="$lines$line
+          "
+          done
+
+          [ "$status" -eq 0 ] || exit 1
+
+          # How many distinct lines are in play. One is correct; more is drift.
+          unique=$(printf '%s' "$lines" | tr -d ' ' | grep -v '^$' | sort -u)
+          distinct=$(printf '%s\n' "$unique" | wc -l)
+
+          if [ "$distinct" -ne 1 ]; then
+            cat <<'EOF'
+
+          ------------------------------------------------------------------
+          The platforms are not on the same version line.
+
+          Zharp ships one line across every platform. The patch is per
+          platform and is expected to differ; the line is not.
+
+          If this is a feature release, it has to land on every platform
+          before the minor moves. Bring the trailing platform up in this same
+          pull request, or hold the minor bump until it is ready.
+
+          If you edited a version.txt by hand, do not: release-please owns
+          every file that carries a version. Revert it and let the release
+          pull request do the bump.
+          ------------------------------------------------------------------
+          EOF
+            exit 1
+          fi
+
+          echo
+          echo "All platforms on line $unique."
