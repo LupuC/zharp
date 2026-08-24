@@ -1,0 +1,12 @@
+{
+  "name": "zharp-icon-font",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Build-time only. Rebuilds Sources/ZharpApp/Resources/tabler-icons.ttf; see build.py.",
+  "//": "Versions are pinned exactly. The font is a committed binary, so a floating range here means two people rebuilding it get different bytes, and an icon quietly disappearing upstream fails the build with a missing-file error that names no cause.",
+  "dependencies": {
+    "@tabler/icons": "3.46.0",
+    "oslllo-svg-fixer": "5.0.0",
+    "simple-icons": "16.28.0"
+  }
+}

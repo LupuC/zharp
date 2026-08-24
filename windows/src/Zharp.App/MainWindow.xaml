@@ -35,19 +35,6 @@
             <Thickness x:Key="TextControlBorderThemeThickness">1</Thickness>
             <Thickness x:Key="TextControlBorderThemeThicknessFocused">1</Thickness>
 
-            <Style x:Key="BarIconButton" TargetType="Button">
-                <Setter Property="Background" Value="Transparent" />
-                <Setter Property="BorderThickness" Value="0" />
-                <Setter Property="Padding" Value="0" />
-                <Setter Property="Width" Value="28" />
-                <Setter Property="Height" Value="28" />
-                <Setter Property="CornerRadius" Value="5" />
-                <Setter Property="Foreground" Value="{ThemeResource BarIconBrush}" />
-            </Style>
-            <Style x:Key="SmallIconButton" TargetType="Button" BasedOn="{StaticResource BarIconButton}">
-                <Setter Property="Width" Value="24" />
-                <Setter Property="Height" Value="24" />
-            </Style>
             <Style x:Key="CaptionButton" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />
@@ -274,6 +261,23 @@
                         </ResourceDictionary.ThemeDictionaries>
                     </ResourceDictionary>
                 </StackPanel.Resources>
+                <!-- Counts sit BEFORE the icon so the icon itself never moves:
+                     the numbers grow leftward into the empty title bar, while
+                     the glyph stays anchored where the eye already found it,
+                     and the caption buttons to its right are untouched.
+                     Only shown while the active session is in a git repo. -->
+                <Button x:Name="DiffButton" Style="{StaticResource BarChipButton}" Visibility="Collapsed"
+                        AutomationProperties.Name="Changes" Click="OnDiffClick"
+                        ToolTipService.ToolTip="Changes">
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock x:Name="DiffCounts" FontSize="11.5" Visibility="Collapsed"
+                                   VerticalAlignment="Center">
+                            <Run x:Name="DiffPlus" />
+                            <Run x:Name="DiffMinus" />
+                        </TextBlock>
+                        <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xECF1;" FontSize="18" />
+                    </StackPanel>
+                </Button>
                 <!-- Subtle tinted pill: red enough to notice, quiet enough to
                      live in the title bar without reading as an error. -->
                 <Button x:Name="UpdateBadge" Visibility="Collapsed" Click="OnUpdateBadgeClick"
@@ -466,8 +470,36 @@
                 </Button>
             </Grid>
 
-            <!-- Terminal area (settings pages render here; terminals overlay it) -->
-            <ContentPresenter x:Name="TerminalHost" Grid.Column="1" Grid.Row="1" />
+            <!-- Terminal area (settings pages render here; terminals overlay it).
+                 TerminalHost is wrapped rather than placed directly so the diff
+                 panel can take a share of the width: the terminal itself lives
+                 in TerminalLayer and is positioned from TerminalHost's bounds,
+                 so shrinking this element moves the terminal with it, with no
+                 extra plumbing. -->
+            <Grid x:Name="TerminalSplit" Grid.Column="1" Grid.Row="1" SizeChanged="OnTerminalSplitSizeChanged">
+                <Grid.ColumnDefinitions>
+                    <!-- MinWidth is the floor that stops a fixed-width diff
+                         panel eating the terminal as the window narrows. The
+                         panel is re-clamped on SizeChanged as well; this is
+                         the guarantee, that is the tidy behaviour. -->
+                    <ColumnDefinition Width="*" MinWidth="240" />
+                    <ColumnDefinition x:Name="DiffSplitterColumn" Width="0" />
+                    <ColumnDefinition x:Name="DiffColumn" Width="0" />
+                </Grid.ColumnDefinitions>
+
+                <ContentPresenter x:Name="TerminalHost" Grid.Column="0" />
+
+                <controls:SidebarSplitter x:Name="DiffResizer" Grid.Column="1" Visibility="Collapsed"
+                                          Background="Transparent"
+                                          PointerPressed="OnDiffSplitterPressed"
+                                          PointerMoved="OnDiffSplitterMoved"
+                                          PointerReleased="OnDiffSplitterReleased"
+                                          PointerCaptureLost="OnDiffSplitterCaptureLost" />
+
+                <Grid x:Name="DiffPanel" Grid.Column="2" Visibility="Collapsed"
+                      Background="{ThemeResource ChromeWashBrush}"
+                      BorderBrush="{ThemeResource HairlineBrush}" BorderThickness="1,0,0,0" />
+            </Grid>
 
             <!-- Shown when every tab has been closed; the app stays open. -->
             <StackPanel x:Name="EmptyState" Grid.Column="1" Grid.Row="1" Visibility="Collapsed"

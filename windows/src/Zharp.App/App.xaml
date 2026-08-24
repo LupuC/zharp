@@ -57,6 +57,38 @@
             <FontFamily x:Key="TablerIcons">ms-appx:///Assets/Fonts/tabler-icons.ttf#tabler-icons</FontFamily>
             <!-- Brand wordmark face: DM Mono Medium (OFL, bundled). -->
             <FontFamily x:Key="ZharpBrandFont">ms-appx:///Assets/Fonts/DMMono-Medium.ttf#DM Mono</FontFamily>
+            <!-- Chrome icon buttons. App-scoped rather than window-scoped:
+                 a StaticResource only searches the tree above the element
+                 using it, so a style living in MainWindow's Grid.Resources is
+                 invisible to any UserControl hosted inside it, and the failure
+                 is a XamlParseException from InitializeComponent that names
+                 the control but not the missing key. -->
+            <Style x:Key="BarIconButton" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Width" Value="28" />
+                <Setter Property="Height" Value="28" />
+                <Setter Property="CornerRadius" Value="5" />
+                <Setter Property="Foreground" Value="{ThemeResource BarIconBrush}" />
+            </Style>
+            <!-- Same chrome as BarIconButton, but the width follows its content.
+                 BarIconButton pins Width to 28 for a lone glyph, which clips
+                 anything sitting beside one. -->
+            <Style x:Key="BarChipButton" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Padding" Value="6,0,8,0" />
+                <Setter Property="MinWidth" Value="28" />
+                <Setter Property="Height" Value="28" />
+                <Setter Property="CornerRadius" Value="5" />
+                <Setter Property="Foreground" Value="{ThemeResource BarIconBrush}" />
+            </Style>
+            <Style x:Key="SmallIconButton" TargetType="Button" BasedOn="{StaticResource BarIconButton}">
+                <Setter Property="Width" Value="24" />
+                <Setter Property="Height" Value="24" />
+            </Style>
+
             <Style x:Key="TablerIcon" TargetType="FontIcon">
                 <Setter Property="FontFamily" Value="{StaticResource TablerIcons}" />
                 <Setter Property="FontSize" Value="14" />

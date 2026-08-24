@@ -21,6 +21,7 @@ enum Shortcuts {
         ShortcutAction(id: "prevTab", displayName: "Previous session", defaultBinding: "Ctrl+Shift+Tab"),
         ShortcutAction(id: "toggleSidebar", displayName: "Toggle tab panel", defaultBinding: "Cmd+B"),
         ShortcutAction(id: "openSettings", displayName: "Open settings", defaultBinding: "Cmd+,"),
+        ShortcutAction(id: "openDiff", displayName: "Open changes", defaultBinding: "Cmd+Shift+D"),
         ShortcutAction(id: "toggleSearch", displayName: "Toggle search", defaultBinding: "Cmd+Shift+F"),
         ShortcutAction(id: "zoomIn", displayName: "Zoom in", defaultBinding: "Cmd+="),
         ShortcutAction(id: "zoomOut", displayName: "Zoom out", defaultBinding: "Cmd+-"),

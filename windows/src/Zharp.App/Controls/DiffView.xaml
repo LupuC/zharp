@@ -1,0 +1,148 @@
+<UserControl
+    x:Class="Zharp.App.Controls.DiffView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Zharp.App.Controls">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- ============ Header: repo, branch, refresh ============ -->
+        <Grid x:Name="HeaderBar" Grid.Row="0" Padding="12,0,6,0" Height="34"
+              BorderBrush="{ThemeResource HairlineBrush}" BorderThickness="0,0,0,1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEF6F;" FontSize="14"
+                          Foreground="{ThemeResource SubtleIconBrush}" VerticalAlignment="Center" />
+                <TextBlock x:Name="RepoText" FontSize="12.5" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock x:Name="BranchText" FontSize="12" VerticalAlignment="Center" Opacity="0.55"
+                           TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                <Button x:Name="CopyButton" Style="{StaticResource SmallIconButton}"
+                        Click="OnCopyClick" AutomationProperties.Name="Copy diff"
+                        ToolTipService.ToolTip="Copy this file's diff">
+                    <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEA7A;" FontSize="15" />
+                </Button>
+                <Button x:Name="RefreshButton" Style="{StaticResource SmallIconButton}"
+                        Click="OnRefreshClick" AutomationProperties.Name="Refresh"
+                        ToolTipService.ToolTip="Refresh">
+                    <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEB13;" FontSize="15" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- ============ Changed files ============ -->
+        <!-- MinHeight as well as MaxHeight: the list sizes to its content, and
+             without a floor a repository with three changed files sits at a
+             different height from one with six, so everything below it moves
+             every time the tab changes. -->
+        <ListView x:Name="FileList" Grid.Row="1" SelectionMode="Single"
+                  SelectionChanged="OnFileSelectionChanged"
+                  MinHeight="132" MaxHeight="196" Padding="4,4,4,4"
+                  VerticalAlignment="Top"
+                  BorderBrush="{ThemeResource HairlineBrush}" BorderThickness="0,0,0,1"
+                  ScrollViewer.HorizontalScrollMode="Disabled"
+                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <!-- WinUI gives a ListView add, delete and reorder transitions by
+                 default, so replacing the source animates every row in. On a
+                 panel that rebuilds whenever you change tab, that reads as the
+                 whole list sliding, which is the movement being complained
+                 about. An empty collection turns them off; there is no
+                 property to disable them individually. -->
+            <ListView.ItemContainerTransitions>
+                <TransitionCollection />
+            </ListView.ItemContainerTransitions>
+            <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem" BasedOn="{StaticResource RoundedListViewItem}">
+                    <Setter Property="Margin" Value="4,1" />
+                    <Setter Property="Padding" Value="8,4,8,4" />
+                    <Setter Property="MinHeight" Value="0" />
+                    <Setter Property="CornerRadius" Value="6" />
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                </Style>
+            </ListView.ItemContainerStyle>
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="local:DiffFileRow">
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{x:Bind Badge}" Foreground="{x:Bind BadgeBrush, Mode=OneWay}"
+                                   FontSize="11.5" FontWeight="SemiBold" Width="13"
+                                   TextAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="{x:Bind Display}" FontSize="12.5"
+                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                   ToolTipService.ToolTip="{x:Bind Path}" />
+                        <!-- Counts arrive after the list does, so this binds OneWay -->
+                        <TextBlock Grid.Column="2" FontSize="11" VerticalAlignment="Center">
+                            <Run Text="{x:Bind Plus, Mode=OneWay}" Foreground="{x:Bind AddBrush, Mode=OneWay}" />
+                            <Run Text="{x:Bind Minus, Mode=OneWay}" Foreground="{x:Bind DelBrush, Mode=OneWay}" />
+                        </TextBlock>
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+
+        <!-- ============ The diff ============
+             Wrapping AND character selection AND a gutter that never gets
+             selected, which looked mutually exclusive and is not.
+
+             The problem was that a separate gutter cannot know that logical
+             line 4 wrapped onto visual row 6, so it drifts. The fix is to stop
+             predicting and start measuring: after layout, every paragraph is
+             asked where it actually rendered (TextPointer.GetCharacterRect)
+             and its number is placed on the Canvas at exactly that Y.
+
+             So the diff is ONE RichTextBlock, which is what native
+             character-level selection across lines needs, it wraps freely, and
+             the numbers are positioned objects that no selection can touch. -->
+        <ScrollViewer x:Name="DiffScroll" Grid.Row="2" ViewChanged="OnDiffScrollChanged"
+                      HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto" Padding="0,8,12,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition x:Name="GutterColumn" Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Numbers are positioned, not laid out: their Y comes from
+                     where the matching paragraph really landed. -->
+                <Canvas x:Name="GutterCanvas" Grid.Column="0" IsHitTestVisible="False" />
+
+                <RichTextBlock x:Name="DiffText" Grid.Column="1"
+                               IsTextSelectionEnabled="True" SizeChanged="OnDiffTextSizeChanged"
+                               FontSize="12.5" LineHeight="17" TextWrapping="Wrap">
+                    <RichTextBlock.ContextFlyout>
+                        <MenuFlyout>
+                            <MenuFlyoutItem Text="Copy" Click="OnCopySelectionClick" />
+                            <MenuFlyoutItem Text="Copy whole file diff" Click="OnCopyClick" />
+                        </MenuFlyout>
+                    </RichTextBlock.ContextFlyout>
+                </RichTextBlock>
+            </Grid>
+        </ScrollViewer>
+
+        <Grid x:Name="EmptyState" Grid.Row="1" Grid.RowSpan="2" Visibility="Collapsed">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                        Spacing="8" MaxWidth="320" Padding="24">
+                <TextBlock x:Name="EmptyTitle" FontSize="13" HorizontalAlignment="Center"
+                           TextAlignment="Center" Opacity="0.8" />
+                <TextBlock x:Name="EmptyBody" FontSize="12" TextWrapping="Wrap" Opacity="0.5"
+                           HorizontalAlignment="Center" TextAlignment="Center" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>

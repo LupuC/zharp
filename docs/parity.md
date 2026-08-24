@@ -79,6 +79,7 @@ means it is not implemented.
 | New tab menu with detected shells | Yes | Yes | Not yet | PowerShell 7, Windows PowerShell, cmd, Git Bash, WSL on Windows; zsh, bash, fish, pwsh, sh on macOS |
 | New tab at the last closed tab's directory | Yes | Yes | Not yet | |
 | Floating session search palette | Yes | Yes | Not yet | |
+| Changes panel: git diff beside the terminal | Yes | Yes | Not yet | Read-only. Changed files, per-file diff with line numbers, totals on the title bar |
 | Panes and splits | Not yet | Not yet | Not yet | Roadmap on both |
 
 ## Shell integration

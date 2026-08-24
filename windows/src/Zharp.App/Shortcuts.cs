@@ -19,6 +19,7 @@ public static class Shortcuts
         new("prevTab", "Previous session", "Ctrl+Shift+Tab"),
         new("toggleSidebar", "Toggle tab panel", "Ctrl+Shift+B"),
         new("openSettings", "Open settings", "Ctrl+,"),
+        new("openDiff", "Open changes", "Ctrl+Shift+D"),
         new("toggleSearch", "Toggle search", "Ctrl+Shift+F"),
         new("zoomIn", "Zoom in", "Ctrl+="),
         new("zoomOut", "Zoom out", "Ctrl+-"),

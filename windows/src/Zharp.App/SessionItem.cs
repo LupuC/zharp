@@ -54,6 +54,15 @@ public sealed class SessionItem : INotifyPropertyChanged
 
     public bool IsSettings => Session == null;
 
+    /// <summary>
+    /// Whether the changes panel is open for THIS session.
+    ///
+    /// The panel is one control in the window, but it belongs to a session:
+    /// each one is its own workspace, in its own repository, and opening the
+    /// diff in one is not a statement about any of the others.
+    /// </summary>
+    public bool DiffOpen { get; set; }
+
     /// <summary>Fixed display name (shell name / page name).</summary>
     public string Title { get; }
 

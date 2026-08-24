@@ -1,3 +1,12 @@
 node_modules/
-package.json
+
+# package.json IS tracked, deliberately. The font it builds is a committed
+# binary, so the versions that produced it have to be recorded somewhere or
+# nobody can rebuild the same bytes. Leaving it untracked cost an afternoon
+# once: the versions had to be guessed, the guess resolved simple-icons to a
+# major that no longer carried one of the brand logos, and build.py died on a
+# missing file with no hint that a version was the cause.
+#
+# The lockfile stays out. Exact versions are pinned in package.json already,
+# and a 200KB lockfile for three build-time dependencies is noise.
 package-lock.json
