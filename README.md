@@ -8,7 +8,7 @@ It is native on each platform: C# and WinUI 3 on Windows, Swift and AppKit on
 macOS, with a shared terminal engine ported line for line between them so the
 two behave the same. There is no web view and no bundled browser.
 
-Both apps are at **0.15.0**. This is beta software: it is used daily, but the
+Both apps are at **0.16.0**. This is beta software: it is used daily, but the
 1.0 label is not on it yet.
 
 ## Features
@@ -58,8 +58,8 @@ answer is in [docs/parity.md](docs/parity.md).
 
 | Platform | Status | Version | Requirements |
 |---|---|---|---|
-| Windows | Working | 0.15.0 | Windows 10 version 2004 (build 19041) or newer, 64-bit |
-| macOS | Working | 0.15.0 | macOS 13 Ventura or newer |
+| Windows | Working | 0.16.0 | Windows 10 version 2004 (build 19041) or newer, 64-bit |
+| macOS | Working | 0.16.0 | macOS 13 Ventura or newer |
 | Linux | Planned, no code yet | none | The toolkit has not been chosen |
 
 ## Install
@@ -74,7 +74,7 @@ Every download below comes from the GitHub releases page:
    must say version 2004 or higher, or a build number of 19041 or higher.
 2. Download `ZharpSetup.exe` from the releases page above. That file always
    points at the newest build. The version stamped file
-   (`ZharpSetup-0.15.0.exe`) is next to it if you want a specific one.
+   (`ZharpSetup-0.16.0.exe`) is next to it if you want a specific one.
 3. Run it. The installer is not code signed yet, so Windows SmartScreen shows a
    blue box that says **"Windows protected your PC"**. Click **More info**, then
    click **Run anyway**. There is no other button that installs it.
@@ -84,14 +84,13 @@ Every download below comes from the GitHub releases page:
 5. Zharp starts when the wizard finishes. Your settings live in
    `%LOCALAPPDATA%\Zharp\settings.json` and survive uninstalling.
 
-If you prefer a package manager:
-
-```powershell
-winget install Zharp.Zharp
-```
-
-If winget answers `No package found matching input criteria`, the manifest for
-that release has not landed in the winget repository yet. Use the installer.
+**winget is not available yet.** The manifest is written and the release
+workflow is wired to keep it current, but the package has not been submitted to
+[microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) for the first
+time, so `winget install Zharp.Zharp` answers `No package found matching input
+criteria` today. Use the installer above. This section changes to a plain
+install command once the first submission is accepted, and the identifier will
+be `Zharp.Zharp`.
 
 ### macOS
 
@@ -201,7 +200,7 @@ zharp/
   windows/    C# / WinUI 3 app. ConPTY, Win2D and DirectWrite rendering.
   macos/      Swift / AppKit app. openpty, Core Text rendering.
   linux/      Placeholder. No code yet, toolkit not chosen.
-  shared/     Platform neutral assets used by more than one app.
+  shared/     Platform neutral assets: shell hooks, palettes, the brand package.
   docs/       Cross platform docs, including the feature parity matrix.
   .github/    CI and release workflows.
 ```
@@ -240,4 +239,7 @@ Bundled third party assets keep their own licences, listed in full in
 - [Tabler Icons](https://tabler.io/icons), MIT, bundled as a subset webfont in
   both apps.
 - [DM Mono](https://fonts.google.com/specimen/DM+Mono), SIL Open Font License
-  1.1, bundled in the macOS app for the wordmark.
+  1.1, bundled in both apps for the wordmark.
+- The Windows installer is self contained, so it also redistributes the .NET
+  runtime (MIT), the Windows App SDK (Microsoft software licence terms) and
+  Win2D (MIT).

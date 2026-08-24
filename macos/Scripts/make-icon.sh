@@ -8,7 +8,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$ROOT/Assets/brand/icons/icon-1024.png"
+REPO="$(cd "$ROOT/.." && pwd)"
+# The brand package is one copy at the repo root, in shared/, not a copy per
+# platform. See shared/README.md.
+SRC="$REPO/shared/brand/icons/icon-1024.png"
 OUT="$ROOT/Packaging/AppIcon.iconset"
 TOOL="$ROOT/.build/icongen"
 
