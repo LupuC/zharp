@@ -333,6 +333,14 @@ final class TailTextField: NSView {
         // linear alpha ramp, so the losing end fades rather than clipping.
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         ctx.saveGState()
+        // The alpha ramp below only covers the band between its start and end
+        // points, so everything past that band is never blended and keeps full
+        // alpha. The overflowing text then draws outside this view entirely,
+        // straight over whatever sits beside it, which in the session list is
+        // the close button. Clipping bounds the damage; the ramp still does the
+        // fading, and it reaches zero exactly at the edge we clip on, so the cut
+        // itself is invisible.
+        ctx.clip(to: bounds)
         let clear = NSColor.black.withAlphaComponent(0).cgColor
         let solid = NSColor.black.cgColor
         ctx.beginTransparencyLayer(auxiliaryInfo: nil)
