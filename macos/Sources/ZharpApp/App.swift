@@ -12,7 +12,7 @@ final class App: NSObject, NSApplicationDelegate {
         if let bundled = bundled as? String, !bundled.isEmpty, bundled != "__VERSION__" {
             return bundled
         }
-        return "0.16.0" // x-release-please-version
+        return "0.17.0" // x-release-please-version
     }()
 
     static private(set) weak var shared: App?
