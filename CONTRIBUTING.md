@@ -32,8 +32,9 @@ collides with work already in flight.
 6. [Commit messages](#commit-messages)
 7. [Sign your commits (DCO)](#sign-your-commits-dco)
 8. [What CI runs on a pull request](#what-ci-runs-on-a-pull-request)
-9. [Opening a pull request](#opening-a-pull-request)
-10. [Things you should never edit by hand](#things-you-should-never-edit-by-hand)
+9. [Features land on every platform at once](#features-land-on-every-platform-at-once)
+10. [Opening a pull request](#opening-a-pull-request)
+11. [Things you should never edit by hand](#things-you-should-never-edit-by-hand)
 
 ---
 
@@ -913,6 +914,102 @@ a platform you genuinely did not touch, say so, that makes the decision obvious.
 
 ---
 
+## Features land on every platform at once
+
+**A feature is not finished until every shipping platform has it.** Read this
+before you start writing one, because it changes where you branch from, and
+finding out afterwards is expensive.
+
+### Why
+
+Zharp's version has two halves that mean different things:
+
+```
+0.19 . 2
+ |     `-- the PATCH. One platform's own bug fixes. Windows can be on
+ |         0.19.2 while macOS is on 0.19.0: macOS had nothing to fix.
+ `-------- the LINE. Every platform is on it. It moves when a feature
+           ships, and it moves for all of them together.
+```
+
+The line is the promise. "Zharp 0.19" means the same thing whichever platform
+you are on, so nobody has to cross-reference a table to find out whether the
+thing they read about exists on their machine.
+
+That promise is enforced, not assumed. `.github/workflows/version-line.yml`
+fails any pull request whose platforms disagree on `MAJOR.MINOR`. It is a
+required check, so it cannot be waved through.
+
+### What that means in practice
+
+Merging a feature that exists on only one platform does not fail anything at
+the time. The wall comes later:
+
+1. Your macOS-only `feat:` merges to `main`. Nothing complains.
+2. release-please opens a release pull request bumping **macOS alone** to
+   0.19.0, leaving Windows on 0.18.x.
+3. `version-line` sees lines `0.19` and `0.18` and fails that release pull
+   request. It cannot merge.
+4. **Nothing can be released now, on any platform.** A Windows bug fix would
+   go into the same release pull request, and that pull request is stuck
+   behind your unfinished feature.
+
+One half-landed feature freezes releases for everyone until somebody writes the
+other half. That is the cost of merging early, and it is paid by whoever needs
+to ship a hotfix that week, not by you.
+
+### So: pair before you merge
+
+Put both implementations on one branch and open one pull request.
+
+```bash
+git checkout main
+git pull
+git checkout -b feat/split-panes      # not feat/split-panes-macos
+```
+
+Write the macOS half. Write the Windows half. Update
+[docs/parity.md](docs/parity.md) in the same branch. Open one pull request
+containing all of it. Both platform CI jobs run, `version-line` stays green
+because no version file moved, and when release-please picks it up afterwards
+it bumps every platform together.
+
+If the two halves are large enough that one diff is unreviewable, keep the
+shared branch and stack pull requests **into it** rather than into `main`:
+
+```
+main
+ └── feat/split-panes            <- the integration branch, merges to main last
+      ├── feat/split-panes-macos     <- PR targets feat/split-panes
+      └── feat/split-panes-windows   <- PR targets feat/split-panes
+```
+
+`main` never sees a half-finished feature, so releases never freeze.
+
+### Only starting one half?
+
+Say so in the pull request, and target a feature branch rather than `main`. If
+you have written the macOS half and cannot write the Windows one, open it
+against a `feat/<slug>` branch and say in the description that Windows is
+outstanding. Somebody else can push the other half onto the same branch. That
+is a normal and welcome way to contribute; what does not work is merging half
+of it to `main` and hoping.
+
+### The exception
+
+Some things are genuinely one platform's alone and always will be: Windows
+first-run onboarding, anything about Rosetta or Gatekeeper, an installer
+detail. These do not have a counterpart to pair with.
+
+Commit them as `fix:` or `chore:` rather than `feat:` where that is honest,
+which moves the patch instead of the line and keeps the platforms level. If it
+truly is a feature and truly cannot exist elsewhere, say so in the pull request
+and add the row to [docs/parity.md](docs/parity.md) explaining why. It will
+need a decision about the version line before it can be released, and that is a
+conversation worth having in the open rather than a rule to route around.
+
+---
+
 ## Opening a pull request
 
 ### 1. Fork and branch
@@ -930,6 +1027,10 @@ git checkout -b fix/cursor-visible-after-resize
 
 Name the branch after the type of change, matching the commit prefix:
 `feat/<slug>`, `fix/<slug>`, `docs/<slug>`, `chore/<slug>`.
+
+Name a feature after the feature, not after a platform: `feat/split-panes`,
+never `feat/split-panes-macos`. One branch carries every platform's half of it.
+See [Features land on every platform at once](#features-land-on-every-platform-at-once).
 
 ### 2. Make the change and test it locally
 

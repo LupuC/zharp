@@ -22,9 +22,16 @@ If there is no issue, explain the motivation here instead. -->
 - [ ] Shared assets (`shared/`)
 - [ ] Docs, CI, or repo tooling only
 
-<!-- If this changes behaviour on one platform but not the others, say so here and say whether
-the other platforms are expected to follow later. A deliberate gap is fine, an accidental one
-is not. -->
+<!-- A `feat:` has to land on EVERY platform in one pull request. Zharp ships one version line,
+0.19 means the same thing everywhere, and version-line.yml enforces it as a required check.
+Merging half a feature to main does not fail anything today; it fails the next release pull
+request instead, and freezes releases for every platform until somebody writes the other half.
+
+If you have only written one half, target a feature branch rather than main and say so here.
+See "Features land on every platform at once" in CONTRIBUTING.md.
+
+Genuinely platform-specific things (onboarding, Gatekeeper, an installer detail) are the
+exception. Say why here. -->
 
 ## How it was tested
 
@@ -47,6 +54,7 @@ Steps:
 
 - [ ] The PR title follows Conventional Commits, for example `feat(macos): tear tabs out into a new window`, `fix(windows): stop the block header flickering`, or `docs: explain shell integration setup`. The title becomes the squashed commit message and drives release notes, so it matters.
 - [ ] Every commit is signed off for the DCO. Commit with `git commit -s`, which appends a `Signed-off-by:` line. To fix an existing branch: `git rebase --signoff main`, then `git push --force-with-lease`.
+- [ ] If this is a `feat:`, every shipping platform is covered by this PR, or this PR targets a feature branch rather than `main`.
 - [ ] `docs/parity.md` is updated if this adds, removes, or changes a user visible feature on any platform.
 - [ ] Tests pass locally, on at least the platform I changed:
   - macOS, from `macos/`: `make test`
