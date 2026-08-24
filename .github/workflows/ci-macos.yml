@@ -42,7 +42,7 @@ jobs:
     name: macos
     # GitHub's macOS runners are Apple Silicon now (macos-13, the last Intel
     # image, has been retired), so the Intel binary Zharp ships is produced by
-    # cross-compiling with --arch x86_64. Add --arch arm64 to go universal.
+    # building both slices, so the one binary runs natively on either.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -67,7 +67,7 @@ jobs:
         run: swift run -c release ZharpCoreSmokeTests
 
       - name: Package .app
-        run: ./Scripts/make-app.sh release --arch x86_64
+        run: ./Scripts/make-app.sh release --arch arm64 --arch x86_64
 
       - name: Verify the bundle
         run: |
@@ -90,8 +90,12 @@ jobs:
           expected=$(tr -d '[:space:]' < version.txt)
           echo "bundle $plist, version.txt $expected"
           test "$plist" = "$expected"
-          # The release ships Intel-only; fail if the cross-compile silently
-          # fell back to the runner's native architecture.
+          # The release ships one universal binary. Fail if either slice is
+          # missing: the runner cannot tell, the DMG cannot tell, and the only
+          # symptom of losing arm64 is every Apple Silicon user quietly going
+          # back through Rosetta. Order is not guaranteed, so match on
+          # membership rather than on the whole string.
           archs=$(lipo -archs dist/Zharp.app/Contents/MacOS/Zharp)
           echo "architectures: $archs"
-          test "$archs" = "x86_64"
+          echo "$archs" | tr ' ' '\n' | grep -qx arm64
+          echo "$archs" | tr ' ' '\n' | grep -qx x86_64
