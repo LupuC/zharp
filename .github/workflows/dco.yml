@@ -25,6 +25,22 @@ concurrency:
 jobs:
   dco:
     name: dco
+    # The release pull request is machine written: release-please rewrites the
+    # version files and the changelogs, and no human authored anything in it,
+    # so there is nothing for anyone to certify. Skipping the whole job is the
+    # honest way to say that.
+    #
+    # It also has to be skipped rather than exempted commit by commit. The
+    # exemption below catches github-actions[bot], which is who commits when
+    # release-please runs on the default token. With RELEASE_PLEASE_TOKEN set,
+    # a personal access token, it commits as the token's owner instead: a real
+    # account, indistinguishable from a contributor, with no sign-off. That
+    # blocked every release until this line existed.
+    #
+    # A job skipped by its `if:` still reports a check run with the conclusion
+    # "skipped", which branch protection accepts. See the note at the top of
+    # ci-required.yml.
+    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 0 because the range below needs the base commit and every
@@ -62,12 +78,11 @@ jobs:
             author=$(git show -s --format='%ae' "$sha")
             subject=$(git show -s --format='%s' "$sha")
 
-            # Bots are exempt. release-please writes the "chore: release main"
-            # commit on its own release pull request, as github-actions[bot],
-            # with no sign-off and no way to add one. Without this the release
-            # pull request could never be merged, which would stop every
-            # release. There is nothing to certify: the bot is not contributing
-            # authored work, it is rewriting version files in this repository.
+            # Bots are exempt: they contribute no authored work, they rewrite
+            # files in this repository. Note that this alone is not enough to
+            # keep release pull requests mergeable, because release-please
+            # commits as a real account when it runs on a personal access
+            # token. That case is handled by the `if:` on the job above.
             case "$author" in
               *"[bot]"*)
                 echo "skip  $(git rev-parse --short "$sha")  $subject  (bot)"
