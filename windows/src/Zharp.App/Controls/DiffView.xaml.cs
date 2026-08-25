@@ -804,7 +804,94 @@ public sealed partial class DiffView : UserControl
             RenderDiff(current, keepScroll: true);
     }
 
-    public void SetUiZoom(double zoom) => ChromeZoom.Apply(this, zoom);
+    public void SetUiZoom(double zoom)
+    {
+        _uiZoom = zoom <= 0 ? 1 : zoom;
+        ChromeZoom.Apply(this, zoom);
+        ApplyFileListHeight(_fileListHeight);
+    }
+
+    // ------------------------------------------------------------ file list size
+
+    private double _uiZoom = 1;
+    private double _fileListHeight = 160;
+    private bool _resizing;
+    private double _dragStartY;
+    private double _dragStartHeight;
+
+    /// <summary>Smallest useful list: about two rows plus its padding.</summary>
+    private const double MinFileListHeight = 64;
+
+    /// <summary>And the diff always keeps this much, however far you drag.</summary>
+    private const double MinDiffHeight = 120;
+
+    /// <summary>
+    /// Sets the stored height, in unzoomed pixels, so it survives a zoom change
+    /// the same way the panel's own width does.
+    /// </summary>
+    public void SetFileListHeight(double height)
+    {
+        _fileListHeight = height <= 0 ? 160 : height;
+        ApplyFileListHeight(_fileListHeight);
+    }
+
+    /// <summary>The height actually in use, unzoomed, for saving.</summary>
+    public double FileListHeight => _fileListHeight;
+
+    private void ApplyFileListHeight(double unzoomed)
+    {
+        double wanted = unzoomed * _uiZoom;
+        FileListRow.Height = new GridLength(Clamp(wanted));
+    }
+
+    /// <summary>
+    /// Keeps the list usable and the diff visible. Done against the panel's
+    /// current height, so shrinking the window cannot leave the diff with no
+    /// room at all.
+    /// </summary>
+    private double Clamp(double height)
+    {
+        double available = ActualHeight - HeaderBar.ActualHeight - MinDiffHeight;
+        double max = Math.Max(MinFileListHeight, available);
+        return Math.Clamp(height, MinFileListHeight, max);
+    }
+
+    private void OnFileListSplitterPressed(object sender, PointerRoutedEventArgs e)
+    {
+        _resizing = true;
+        _dragStartY = e.GetCurrentPoint(this).Position.Y;
+        _dragStartHeight = FileList.ActualHeight;
+        ((UIElement)sender).CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+
+    private void OnFileListSplitterMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_resizing)
+            return;
+        double y = e.GetCurrentPoint(this).Position.Y;
+        FileListRow.Height = new GridLength(Clamp(_dragStartHeight + (y - _dragStartY)));
+        e.Handled = true;
+    }
+
+    private void OnFileListSplitterReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_resizing)
+            return;
+        _resizing = false;
+        ((UIElement)sender).ReleasePointerCapture(e.Pointer);
+
+        // Stored unzoomed, so the panel looks the same at any zoom.
+        _fileListHeight = FileList.ActualHeight / _uiZoom;
+        FileListHeightChanged?.Invoke(_fileListHeight);
+        e.Handled = true;
+    }
+
+    private void OnFileListSplitterCaptureLost(object sender, PointerRoutedEventArgs e) =>
+        _resizing = false;
+
+    /// <summary>Raised when a drag ends, so the window can save it.</summary>
+    public event Action<double>? FileListHeightChanged;
 
     private static Color FromRgb(uint rgb) => Color.FromArgb(
         0xFF, (byte)((rgb >> 16) & 0xFF), (byte)((rgb >> 8) & 0xFF), (byte)(rgb & 0xFF));

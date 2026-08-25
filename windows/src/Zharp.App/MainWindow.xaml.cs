@@ -1152,6 +1152,12 @@ public sealed partial class MainWindow : Window
                 _diffView = new DiffView();
                 _diffView.SetPalette(_terminalPalette);
                 _diffView.SetFontFamily(_settings.FontFamily);
+                _diffView.SetFileListHeight(_settings.DiffFileListHeight);
+                _diffView.FileListHeightChanged += height =>
+                {
+                    _settings.DiffFileListHeight = height;
+                    _settings.Save();
+                };
                 DiffPanel.Children.Add(_diffView);
                 _diffView.Loaded += (_, _) => _diffView!.SetUiZoom(_settings.UiZoom);
             }

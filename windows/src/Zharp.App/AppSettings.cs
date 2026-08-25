@@ -74,6 +74,14 @@ public sealed class AppSettings
     public bool AgentNotifications { get; set; } = true;
 
     /// <summary>
+    /// Height of the changed-files list inside the changes panel, in unzoomed
+    /// pixels. How many files a repository has says nothing about how many you
+    /// want to see at once, so it is worth dragging and worth remembering.
+    /// </summary>
+    [JsonPropertyName("diffFileListHeight")]
+    public double DiffFileListHeight { get; set; } = 160;
+
+    /// <summary>
     /// Whether the AI agent hooks stay installed. Deliberately has no switch in
     /// Settings: agent support is part of the terminal, not a feature to go and
     /// find, and a tab that cannot say its agent is blocked is the whole thing

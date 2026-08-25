@@ -7,6 +7,11 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <!-- The file list gets an explicit height so it can be dragged.
+                 It used to size to its content between a floor and a ceiling,
+                 which meant a repository with three changed files put the diff
+                 in a different place from one with six. -->
+            <RowDefinition x:Name="FileListRow" Height="160" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
@@ -43,14 +48,9 @@
         </Grid>
 
         <!-- ============ Changed files ============ -->
-        <!-- MinHeight as well as MaxHeight: the list sizes to its content, and
-             without a floor a repository with three changed files sits at a
-             different height from one with six, so everything below it moves
-             every time the tab changes. -->
         <ListView x:Name="FileList" Grid.Row="1" SelectionMode="Single"
                   SelectionChanged="OnFileSelectionChanged"
-                  MinHeight="132" MaxHeight="196" Padding="4,4,4,4"
-                  VerticalAlignment="Top"
+                  Padding="4,4,4,4"
                   BorderBrush="{ThemeResource HairlineBrush}" BorderThickness="0,0,0,1"
                   ScrollViewer.HorizontalScrollMode="Disabled"
                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
@@ -96,6 +96,16 @@
             </ListView.ItemTemplate>
         </ListView>
 
+        <!-- The grip between the file list and the diff. Invisible, six pixels
+             tall, sitting on the hairline the list already draws: a visible bar
+             would be chrome for something you touch once. -->
+        <local:RowSplitter x:Name="FileListResizer" Grid.Row="2" Height="6"
+                              Margin="0,-3,0,-3" Background="Transparent"
+                              PointerPressed="OnFileListSplitterPressed"
+                              PointerMoved="OnFileListSplitterMoved"
+                              PointerReleased="OnFileListSplitterReleased"
+                              PointerCaptureLost="OnFileListSplitterCaptureLost" />
+
         <!-- ============ The diff ============
              Wrapping AND character selection AND a gutter that never gets
              selected, which looked mutually exclusive and is not.
@@ -109,7 +119,8 @@
              So the diff is ONE RichTextBlock, which is what native
              character-level selection across lines needs, it wraps freely, and
              the numbers are positioned objects that no selection can touch. -->
-        <ScrollViewer x:Name="DiffScroll" Grid.Row="2" ViewChanged="OnDiffScrollChanged"
+
+        <ScrollViewer x:Name="DiffScroll" Grid.Row="3" ViewChanged="OnDiffScrollChanged"
                       HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto" Padding="0,8,12,12">
             <Grid>
@@ -135,7 +146,7 @@
             </Grid>
         </ScrollViewer>
 
-        <Grid x:Name="EmptyState" Grid.Row="1" Grid.RowSpan="2" Visibility="Collapsed">
+        <Grid x:Name="EmptyState" Grid.Row="1" Grid.RowSpan="3" Visibility="Collapsed">
             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
                         Spacing="8" MaxWidth="320" Padding="24">
                 <TextBlock x:Name="EmptyTitle" FontSize="13" HorizontalAlignment="Center"
