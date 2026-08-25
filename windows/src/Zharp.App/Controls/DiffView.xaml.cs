@@ -1049,16 +1049,19 @@ public sealed partial class DiffView : UserControl
             return;
         }
 
-        if (await GitStatus.RemoteProblemAsync(at.Remote, ct) is { Length: > 0 } problem)
-        {
-            ShowEmpty($"Cannot read git on {host}", problem);
-            return;
-        }
-
+        // Before asking whether the machine can be reached, because without a
+        // directory there is nothing to ask it. Connecting here would be a
+        // login on someone's server to find out something already known.
         if (!at.HasPath)
         {
             ShowEmpty($"Somewhere on {host}",
                 "The shell over there has not said which directory it is in. Zharp reads OSC 7, and the window title as a fallback.");
+            return;
+        }
+
+        if (await GitStatus.RemoteProblemAsync(at.Remote, ct) is { Length: > 0 } problem)
+        {
+            ShowEmpty($"Cannot read git on {host}", problem);
             return;
         }
 
