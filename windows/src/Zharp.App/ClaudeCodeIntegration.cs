@@ -32,6 +32,14 @@ public static class ClaudeCodeIntegration
         // panel can act on.
         ("PostToolUse", "tool", "Edit|Write|NotebookEdit"),
 
+        // Once per batch of tool calls, not once per call, which is what makes
+        // it affordable to subscribe to unconditionally. Its job is to say the
+        // agent is moving again: no agent emits "that permission was answered",
+        // and PostToolUse above only fires for writes, so a tab that asked to
+        // run a command went on claiming to be blocked through every read and
+        // search that followed.
+        ("PostToolBatch", "working", null),
+
         ("PermissionRequest", "permission", null),
         ("Notification", "idle", "idle_prompt"),
         ("Stop", "done", null),

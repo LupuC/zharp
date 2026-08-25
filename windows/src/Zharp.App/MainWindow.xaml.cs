@@ -1408,9 +1408,11 @@ public sealed partial class MainWindow : Window
         OnboardingOverlay.RequestedTheme = Root.RequestedTheme;
 
         _terminalPalette = spec.CreatePalette();
+        SessionItem.IsDarkTheme = spec.IsDark;
         foreach (var item in _sessions)
         {
             item.View?.SetPalette(_terminalPalette);
+            item.ThemeChanged();
         }
         _diffView?.SetPalette(_terminalPalette);
         _diffView?.SetFontFamily(_settings.FontFamily);

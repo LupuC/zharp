@@ -108,8 +108,10 @@
                         <controls:TailTextBlock Text="{Binding DisplayTitle}" FontSize="{Binding Z12}"
                                                 EmphasisBold="True" TailFirst="{Binding TitleTailFirst}" />
                         <controls:TailTextBlock Text="{Binding DisplaySubtitle}" FontSize="{Binding Z11}"
-                                                Opacity="0.55" TailFirst="{Binding SubtitleTailFirst}"
+                                                Opacity="{Binding SubtitleOpacity}"
+                                                TailFirst="{Binding SubtitleTailFirst}"
                                                 Tint="{Binding SubtitleTint}"
+                                                EmphasisBold="{Binding SubtitleBold}"
                                                 Visibility="{Binding SubtitleVisibility}" />
                     </StackPanel>
                     <Button Grid.Column="2" Style="{StaticResource CardCloseButton}"

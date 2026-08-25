@@ -228,6 +228,8 @@ public sealed class SessionItem : INotifyPropertyChanged
             Notify(nameof(NeedsAttention));
             Notify(nameof(AttentionVisibility));
             Notify(nameof(SubtitleTint));
+            Notify(nameof(SubtitleBold));
+            Notify(nameof(SubtitleOpacity));
             AttentionChanged?.Invoke(this);
         }
     }
@@ -279,8 +281,20 @@ public sealed class SessionItem : INotifyPropertyChanged
         if (agent >= 0 && SetAgent(agent))
             NotifyDisplayChanged();
 
+        bool wasBlocked = _needsAttention;
         NeedsAttention = report.NeedsAttention;
-        _agentSummary = report.Summary.Length > 0 ? report.Summary : null;
+
+        if (report.Event == AgentEvent.Working && !wasBlocked && _agentSummary != null)
+        {
+            // Nothing to say: this event exists to unstick a stale "waiting for
+            // you", and the line already on screen is the more specific one.
+            // The batch that just resolved is usually the very edit it names.
+        }
+        else
+        {
+            _agentSummary = report.Summary.Length > 0 ? report.Summary : null;
+        }
+
         RefreshAgentClock();
 
         if (report.Path is { Length: > 0 } path)
@@ -321,7 +335,7 @@ public sealed class SessionItem : INotifyPropertyChanged
 
         // "Done" is a finished measurement, so it stops rather than counting
         // on. A blocked agent keeps counting: the number growing is the point.
-        bool moving = _lastEvent is AgentEvent.Prompt or AgentEvent.Tool
+        bool moving = _lastEvent is AgentEvent.Prompt or AgentEvent.Tool or AgentEvent.Working
             or AgentEvent.Permission or AgentEvent.Idle or AgentEvent.Error;
         if (moving)
             StartClock();
@@ -334,7 +348,8 @@ public sealed class SessionItem : INotifyPropertyChanged
         DateTime from = _lastEvent switch
         {
             // Measured from the prompt, through however many tools it took.
-            AgentEvent.Prompt or AgentEvent.Tool or AgentEvent.Done => _turnStart,
+            AgentEvent.Prompt or AgentEvent.Tool
+                or AgentEvent.Working or AgentEvent.Done => _turnStart,
 
             // Measured from the moment it stopped being able to continue.
             AgentEvent.Permission or AgentEvent.Idle or AgentEvent.Error => _stateSince,
@@ -404,8 +419,17 @@ public sealed class SessionItem : INotifyPropertyChanged
     private AgentEvent? _lastEvent;
 
     private static readonly Color DoneGreen = Color.FromArgb(0xFF, 0x3F, 0xB9, 0x50);
-    private static readonly Color WaitingAmber = Color.FromArgb(0xFF, 0xE0, 0x9B, 0x28);
     private static readonly Color NoTint = Color.FromArgb(0x00, 0x00, 0x00, 0x00);
+
+    // Amber has to carry on both a near-black and a cream background, and one
+    // value cannot: the bright gold that reads as a warning on dark is barely
+    // legible on paper. So there are two, matching the badge dot's brushes.
+    private static readonly Color WaitingAmberDark = Color.FromArgb(0xFF, 0xF0, 0xB4, 0x29);
+    private static readonly Color WaitingAmberLight = Color.FromArgb(0xFF, 0xB0, 0x69, 0x00);
+
+    /// <summary>Which theme the cards are drawn on. Process wide, like the
+    /// setting behind it; the tint is a raw color, so it cannot ask XAML.</summary>
+    internal static bool IsDarkTheme { get; set; } = true;
 
     /// <summary>
     /// Status line color: amber while the agent is waiting on you, green when
@@ -416,12 +440,29 @@ public sealed class SessionItem : INotifyPropertyChanged
         get
         {
             if (_needsAttention)
-                return WaitingAmber;
+                return IsDarkTheme ? WaitingAmberDark : WaitingAmberLight;
             if (_lastEvent == AgentEvent.Done || _agentStatus == DoneStatus)
                 return DoneGreen;
             return NoTint;
         }
     }
+
+    /// <summary>
+    /// Bold only while the agent is blocked. The status line is glanced at, not
+    /// read, so the one state that wants you to act is the one state that gets
+    /// weight; making the rest bold would spend the emphasis on nothing.
+    /// </summary>
+    public bool SubtitleBold => _needsAttention;
+
+    /// <summary>
+    /// The second line is normally held back so the first one leads. A blocked
+    /// agent is the exception: dimming the one line that is asking for
+    /// something was undoing the colour that was meant to make it stand out.
+    /// </summary>
+    public double SubtitleOpacity => _needsAttention ? 1.0 : 0.55;
+
+    /// <summary>The theme changed under us, so the tint has to be re-read.</summary>
+    public void ThemeChanged() => Notify(nameof(SubtitleTint));
 
     private void ApplyAgentStatus(string? spinner)
     {

@@ -34,6 +34,14 @@ try {
 
     $tool = [string] $hook.tool_name
     $toolInput = $hook.tool_input
+
+    # MCP tools arrive as mcp__<server>__<tool>, which is addressing, not a
+    # name. "todoist add-tasks" is the same information without the plumbing.
+    $toolLabel = $tool
+    if ($tool -like 'mcp__*') {
+        $parts = $tool -split '__', 3
+        if ($parts.Count -ge 3) { $toolLabel = "$($parts[1]) $($parts[2])" }
+    }
     $path = $null
     $summary = ''
 
@@ -64,12 +72,32 @@ try {
             $summary = if ($why) { "Stopped: $why" } else { 'Stopped' }
         }
 
+        # A batch of tool calls finished, so the agent is running again. Used
+        # only to clear a stale "waiting for you": there is no event for a
+        # permission having been answered, and without this the tab kept
+        # claiming to be blocked for the rest of the turn. The body is
+        # deliberately ignored, so this does not depend on the shape of
+        # tool_calls.
+        'working' { $summary = 'Working' }
+
         'permission' {
-            $summary = if ($target) { "Needs you: $tool $target" } else { "Needs you: $tool" }
+            # Plain English, not tool names. "AskUserQuestion" is Claude's
+            # vocabulary and means nothing to somebody glancing at a tab.
+            $summary = switch ($tool) {
+                'AskUserQuestion' { 'Has a question for you' }
+                'ExitPlanMode'    { 'Wants you to approve a plan' }
+                'Task'            { 'Wants to start a subagent' }
+                'Bash'            { if ($target) { "Wants to run $target" }   else { 'Wants to run a command' } }
+                'Edit'            { if ($target) { "Wants to edit $target" }  else { 'Wants to edit a file' } }
+                'NotebookEdit'    { if ($target) { "Wants to edit $target" }  else { 'Wants to edit a notebook' } }
+                'Write'           { if ($target) { "Wants to write $target" } else { 'Wants to write a file' } }
+                'WebFetch'        { if ($target) { "Wants to fetch $target" } else { 'Wants to fetch a page' } }
+                default           { if ($tool)   { "Wants to use $toolLabel" } else { 'Needs your go-ahead' } }
+            }
         }
 
         'tool' {
-            $summary = if ($target) { "$tool $target" } else { $tool }
+            $summary = if ($target) { "$toolLabel $target" } else { $toolLabel }
 
             # Only the tools that WRITE hand back a path. The changes panel
             # follows this, and a panel that jumped every time the agent read

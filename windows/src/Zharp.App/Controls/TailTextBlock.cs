@@ -81,16 +81,25 @@ public sealed partial class TailTextBlock : Grid
         set => SetValue(FontSizeProperty, value);
     }
 
-    /// <summary>SemiBold when true.</summary>
+    /// <summary>
+    /// SemiBold when true. A dependency property rather than a plain one so a
+    /// card can bind it to per-item state: a session's status line goes bold
+    /// while its agent is blocked, and back when it is not.
+    /// </summary>
+    public static readonly DependencyProperty EmphasisBoldProperty =
+        DependencyProperty.Register(nameof(EmphasisBold), typeof(bool), typeof(TailTextBlock),
+            new PropertyMetadata(false, (d, e) =>
+            {
+                var self = (TailTextBlock)d;
+                self._bold = (bool)e.NewValue;
+                self.UpdateMetrics();
+                self._canvas.Invalidate();
+            }));
+
     public bool EmphasisBold
     {
-        get => _bold;
-        set
-        {
-            _bold = value;
-            UpdateMetrics();
-            _canvas.Invalidate();
-        }
+        get => (bool)GetValue(EmphasisBoldProperty);
+        set => SetValue(EmphasisBoldProperty, value);
     }
 
     /// <summary>Right-align the text when it fits (it already right-aligns on

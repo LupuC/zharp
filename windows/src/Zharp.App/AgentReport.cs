@@ -14,6 +14,14 @@ public enum AgentEvent
     /// <summary>A tool finished. Carries which one, and the file if it touched one.</summary>
     Tool,
 
+    /// <summary>
+    /// A batch of tool calls resolved, so the agent is running rather than
+    /// blocked. Exists because no agent emits "that permission was answered":
+    /// without something to say the agent moved again, a tab that asked for
+    /// permission goes on claiming to be blocked for the rest of the turn.
+    /// </summary>
+    Working,
+
     /// <summary>The agent is blocked asking permission to do something.</summary>
     Permission,
 
@@ -111,6 +119,7 @@ public sealed record AgentReport(
         "start" => AgentEvent.Start,
         "prompt" => AgentEvent.Prompt,
         "tool" => AgentEvent.Tool,
+        "working" => AgentEvent.Working,
         "permission" => AgentEvent.Permission,
         "idle" => AgentEvent.Idle,
         "done" => AgentEvent.Done,
