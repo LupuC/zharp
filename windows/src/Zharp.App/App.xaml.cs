@@ -130,6 +130,8 @@ public partial class App : Application
             // not one yet.
             if (CodexIntegration.Sync(Settings.AgentIntegration))
                 Settings.CodexNoticeFor = "";
+
+            OpenCodeIntegration.Sync(Settings.AgentIntegration);
         });
 
         _window = new MainWindow();

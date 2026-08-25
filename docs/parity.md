@@ -71,9 +71,9 @@ means it is not implemented.
 | Live working directory on the tab card | Yes | Yes | Not yet | |
 | Last command run shown on the tab card | Yes | Yes | Not yet | |
 | AI agent logo and live status on the tab card | Yes | Yes | Not yet | Detects Claude Code, Codex, Gemini CLI, OpenCode, Aider |
-| Agents report their own status instead of it being read off the screen | Partial | Not yet | Not yet | Claude Code and Codex. See [docs/agent-protocol.md](agent-protocol.md) |
+| Agents report their own status instead of it being read off the screen | Partial | Not yet | Not yet | Claude Code, Codex and OpenCode. See [docs/agent-protocol.md](agent-protocol.md) |
 | Badge, taskbar flash and notification when an agent is waiting for you | Yes | Not yet | Not yet | Badge always; the interruptions are `Terminal > Notifications` |
-| Changes panel follows the file an agent is editing | Yes | Not yet | Not yet | |
+| Changes panel follows the file an agent is editing | Yes | Not yet | Not yet | Claude Code and OpenCode; Codex hooks cost too much per tool call |
 | Drag a tab to reorder it | Yes | Yes | Not yet | |
 | Drag a tab onto another window to hand it over, shell still running | Yes | Yes | Not yet | |
 | Tear a tab out into a window of its own | Yes | Yes | Not yet | |

@@ -32,7 +32,7 @@ today means Claude Code.
 `%LOCALAPPDATA%\Zharp\agents` and Zharp picks it up. This is for agents with no
 way to return a terminal sequence, which is most of them: a hook process has no
 controlling terminal of its own, and on Windows there is not even a `/dev/tty`
-to borrow. Codex works this way.
+to borrow. Codex and OpenCode work this way.
 
 The spool has to answer a question the pty answers for free: which tab. It is
 not guessed from the working directory, which cannot separate two agents in one
@@ -108,11 +108,20 @@ allowed to overflow.
 a changes panel that jumped to every file the agent merely looked at would be
 unusable. Reads, searches and shell commands report a `summary` and no path.
 
-**Hooks cost real time.** Each hook invocation spawns a process, which on
-Windows is around 260ms for a PowerShell host. That is why the write-file hook
-is filtered to the tools that actually write, rather than firing after every
-tool call: a busy turn makes dozens of tool calls and would pay the cost for
-every one of them.
+**What a hook costs decides what to subscribe to, and it is not the same for
+each agent.** This is the thing to check before designing anything else.
+
+| | how a hook runs | cost of one |
+|---|---|---|
+| Claude Code | an argument list, no shell | one process |
+| Codex | a command line, so `cmd.exe` on Windows | two processes |
+| OpenCode | a function call, in process | nothing |
+
+Measured: a PowerShell host starts in ~139ms, node in ~48ms. Zharp subscribed
+Codex to `PostToolUse` before checking, which is two processes for every tool
+call an agent makes; you could watch them appear and the terminal was slower
+for it. Codex now gets one hook, for the one thing that cannot be worked out
+any other way. OpenCode, where a hook is free, gets everything useful.
 
 **The hook must be silent outside Zharp.** Zharp sets `ZHARP_AGENT_PROTOCOL` in
 the environment of every shell it starts. A hook that does not find it exits
@@ -240,7 +249,36 @@ working directory.
 Not yet. Gemini CLI has had hooks since v0.26.0, including `Notification` and
 `Stop`, configured in `~/.gemini/settings.json`.
 
-### OpenCode, Aider
+### OpenCode
 
-Not yet. Both are recognized on the tab card by name, with status read from the
-screen.
+Implemented, through the spool, and the cheapest of the three. Verified against
+opencode 1.15.6.
+
+OpenCode loads plugins into its own process, so a hook is a function call:
+there is no shell, no process to spawn, and nothing to pay per tool call. That
+is why this subscribes to what it needs rather than to the least it can get
+away with, which is the shape Codex forced.
+
+| Zharp event | OpenCode hook or event |
+|---|---|
+| `prompt` | `chat.message` |
+| `permission` | `permission.ask` |
+| `working` | `permission.replied` |
+| `tool` | `file.edited` |
+| `done` | `session.idle` |
+
+It is the only one of the three that reports a permission having been
+**answered**, so nothing is inferred there. `file.edited` hands over the path
+directly, so the changes panel follows along without a patch to parse, and
+`Permission.title` is already the sentence OpenCode's own dialog shows, so
+there is no per-tool wording to invent.
+
+The plugin is copied into OpenCode's config directory and registered in
+`opencode.json` by a path relative to it. An absolute Windows path in that list
+would be ambiguous with an npm package name, and a relative one is what
+OpenCode's own plugins use. Plugins load when a session starts rather than at
+startup, so a newly installed one takes effect on the next session.
+
+### Aider
+
+Not yet. Recognized on the tab card by name, with status read from the screen.
