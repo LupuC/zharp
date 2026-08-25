@@ -206,6 +206,16 @@ public sealed class SessionItem : INotifyPropertyChanged
         };
         session.PromptReturned += () => dispatcher.TryEnqueue(AgentFinished);
 
+        // Typing into a session whose agent is waiting is the answer to it.
+        // The badge is about a question you have not seen; you are answering
+        // it. This replaces asking the agent to tell us, which on Codex meant
+        // a process for every tool call it made.
+        session.UserTyped += () => dispatcher.TryEnqueue(() =>
+        {
+            if (_needsAttention)
+                NeedsAttention = false;
+        });
+
         // The other transport. Agents that cannot write to the terminal drop
         // their reports in a directory instead, and the one addressed to this
         // session is the one carrying its key. Same report, same handler from

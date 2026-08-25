@@ -44,20 +44,39 @@ public static class CodexIntegration
     /// </summary>
     private static readonly (string Event, string Kind, string? Matcher)[] Hooks =
     [
-        ("SessionStart", "start", null),
         ("UserPromptSubmit", "prompt", null),
-
-        // Every tool, not just the ones that write. Codex has no once-per-batch
-        // event, so this is also the only signal that the agent is running
-        // again after a permission prompt was answered; without it a tab would
-        // go on claiming to be blocked for the rest of the turn. Affordable
-        // because the hook is node: ~48ms a call against PowerShell's ~139ms.
-        ("PostToolUse", "tool", null),
-
         ("PermissionRequest", "permission", null),
         ("Stop", "done", null),
-        ("SessionEnd", "end", null),
     ];
+
+    // Three hooks, each firing about once a turn, and that number is the whole
+    // design rather than a starting point.
+    //
+    // Codex has no argv form for a hook: there is only a command line, and on
+    // Windows it goes through cmd.exe. So every hook invocation is two
+    // processes, cmd.exe and then node. Subscribing to PostToolUse, which is
+    // what an earlier version did to catch every file a tool wrote, meant two
+    // processes for every tool call an agent made. You could watch them
+    // appear, and the terminal was slower for it.
+    //
+    // What was dropped, and why it costs nothing:
+    //
+    //   SessionStart - Zharp already knows Codex is running, because it read
+    //   the command that started it.
+    //
+    //   SessionEnd - the shell drawing its prompt again says the agent has
+    //   exited, and says it more reliably than a hook running inside a process
+    //   that is busy dying.
+    //
+    //   PostToolUse - the expensive one. It bought a live "editing that file"
+    //   line and let the changes panel follow along, and neither is worth a
+    //   pair of processes per tool call. Claude Code keeps both because it
+    //   takes an argument list rather than a command line, so there is no
+    //   shell, and because its hook can be matched to just the tools that
+    //   write. Codex can do neither.
+    //
+    // A permission that has been answered is noticed without any hook at all:
+    // typing into a session is Zharp's own signal that the user has replied.
 
     private const string ScriptName = "zharp-agent.js";
 
@@ -126,6 +145,18 @@ public static class CodexIntegration
                     || !groups.Any(g => JsonNode.DeepEquals(g, want)))
                     return false;
             }
+
+            // And nothing of ours anywhere else. Checking only that today's
+            // hooks are present would call a file current while an older
+            // version's PostToolUse entry sat in it still firing on every tool
+            // call, because everything this version looks for was indeed there.
+            foreach (var pair in hooks)
+            {
+                if (Hooks.Any(h => h.Event == pair.Key))
+                    continue;
+                if (pair.Value is JsonArray extra && extra.Any(IsOurs))
+                    return false;
+            }
             return true;
         }
         catch (Exception ex)
@@ -181,6 +212,13 @@ public static class CodexIntegration
             root["hooks"] = hooks;
         }
 
+        // Sweep every event first, not only the ones installed today. A
+        // previous version of Zharp subscribed to more of them, and an entry
+        // left on an event this version no longer knows about would go on
+        // running a script we have stopped meaning to run - which for
+        // PostToolUse meant a pair of processes on every tool call, forever.
+        SweepOurs(hooks);
+
         foreach (var (name, kind, matcher) in Hooks)
         {
             if (hooks[name] is not JsonArray groups)
@@ -188,8 +226,6 @@ public static class CodexIntegration
                 groups = new JsonArray();
                 hooks[name] = groups;
             }
-
-            DropOurs(groups);
             groups.Add(Group(kind, matcher));
         }
 
@@ -205,14 +241,7 @@ public static class CodexIntegration
         if (Read() is not { } root || root["hooks"] is not JsonObject hooks)
             return;
 
-        foreach (var (name, _, _) in Hooks)
-        {
-            if (hooks[name] is not JsonArray groups)
-                continue;
-            DropOurs(groups);
-            if (groups.Count == 0)
-                hooks.Remove(name);
-        }
+        SweepOurs(hooks);
 
         if (hooks.Count == 0)
         {
@@ -251,6 +280,24 @@ public static class CodexIntegration
             group["matcher"] = matcher;
         group["hooks"] = new JsonArray(hook);
         return group;
+    }
+
+    /// <summary>
+    /// Takes our hooks out of every event in the file, and removes any event
+    /// left with nothing in it. Keyed on the script rather than on the list of
+    /// events above, so a hook this version does not know it ever installed is
+    /// still cleaned up.
+    /// </summary>
+    private static void SweepOurs(JsonObject hooks)
+    {
+        foreach (string name in hooks.Select(pair => pair.Key).ToList())
+        {
+            if (hooks[name] is not JsonArray groups)
+                continue;
+            DropOurs(groups);
+            if (groups.Count == 0)
+                hooks.Remove(name);
+        }
     }
 
     private static void DropOurs(JsonArray groups)

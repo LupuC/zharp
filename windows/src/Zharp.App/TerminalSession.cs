@@ -57,6 +57,16 @@ public sealed class TerminalSession : IDisposable
     /// the foreground has exited.</summary>
     public event Action? PromptReturned;
 
+    /// <summary>
+    /// The user sent input to this session.
+    ///
+    /// Worth an event because of what it means when an agent is waiting: they
+    /// have answered it. No agent emits "that permission was resolved", and
+    /// subscribing to every tool call to infer it costs a process per call.
+    /// Zharp is the one holding the keyboard, so it already knows.
+    /// </summary>
+    public event Action? UserTyped;
+
     public TerminalSession(string commandLine, string? workingDirectory, string initialTitle,
         int scrollbackLines = 10000)
     {
@@ -208,6 +218,7 @@ public sealed class TerminalSession : IDisposable
             if (pending != null)
                 CommandExecuted(pending);
         }
+        UserTyped?.Invoke();
         WriteRaw(text);
     }
 

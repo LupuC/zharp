@@ -164,6 +164,16 @@ public static class ClaudeCodeIntegration
                     || !groups.Any(g => JsonNode.DeepEquals(g, want)))
                     return false;
             }
+
+            // And nothing of ours anywhere else, so an event a previous version
+            // subscribed to does not stay behind running.
+            foreach (var pair in hooks)
+            {
+                if (Hooks.Any(h => h.Event == pair.Key))
+                    continue;
+                if (pair.Value is JsonArray extra && extra.Any(IsOurs))
+                    return false;
+            }
             return true;
         }
         catch (Exception ex)
@@ -187,6 +197,11 @@ public static class ClaudeCodeIntegration
             root["hooks"] = hooks;
         }
 
+        // Every event, not only the ones installed today: a previous version
+        // may have subscribed to more, and an entry left behind on an event
+        // this version no longer knows about would keep running.
+        SweepOurs(hooks);
+
         foreach (var (name, kind, matcher) in Hooks)
         {
             if (hooks[name] is not JsonArray groups)
@@ -194,8 +209,6 @@ public static class ClaudeCodeIntegration
                 groups = new JsonArray();
                 hooks[name] = groups;
             }
-
-            DropOurs(groups);
             groups.Add(Group(kind, matcher));
         }
 
@@ -211,14 +224,7 @@ public static class ClaudeCodeIntegration
         if (Read() is not { } root || root["hooks"] is not JsonObject hooks)
             return;
 
-        foreach (var (name, _, _) in Hooks)
-        {
-            if (hooks[name] is not JsonArray groups)
-                continue;
-            DropOurs(groups);
-            if (groups.Count == 0)
-                hooks.Remove(name);
-        }
+        SweepOurs(hooks);
 
         if (hooks.Count == 0)
             root.Remove("hooks");
@@ -252,6 +258,24 @@ public static class ClaudeCodeIntegration
             group["matcher"] = matcher;
         group["hooks"] = new JsonArray(hook);
         return group;
+    }
+
+    /// <summary>
+    /// Takes our hooks out of every event in the file, and removes any event
+    /// left with nothing in it. Keyed on the script rather than on the list of
+    /// events above, so a hook this version does not know it ever installed is
+    /// still cleaned up.
+    /// </summary>
+    private static void SweepOurs(JsonObject hooks)
+    {
+        foreach (string name in hooks.Select(pair => pair.Key).ToList())
+        {
+            if (hooks[name] is not JsonArray groups)
+                continue;
+            DropOurs(groups);
+            if (groups.Count == 0)
+                hooks.Remove(name);
+        }
     }
 
     private static void DropOurs(JsonArray groups)
