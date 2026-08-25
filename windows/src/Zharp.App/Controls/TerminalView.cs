@@ -236,6 +236,7 @@ public sealed class TerminalView : UserControl, IDisposable
         _disposed = true;
         _session.OutputArrived -= OnOutputArrived;
         _blinkTimer?.Stop();
+        _paintTimer?.Stop();
         _canvas.RemoveFromVisualTree();
     }
 
@@ -395,14 +396,57 @@ public sealed class TerminalView : UserControl, IDisposable
     /// </summary>
     private const int MaxHoldMs = 120;
 
-    private long _holdingSince;
+    /// <summary>
+    /// How often the screen is allowed to be repainted, in milliseconds. A
+    /// display refresh, near enough.
+    /// </summary>
+    private const int PaintIntervalMs = 16;
 
+    private long _holdingSince;
+    private volatile bool _dirty;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _paintTimer;
+
+    /// <summary>
+    /// Output has arrived. Note it and let the clock decide when to paint.
+    ///
+    /// Painting straight off the byte stream sounds responsive and is not. A
+    /// program mid animation emits a chunk per letter, and every one of them
+    /// became a repaint of the whole terminal; worse, it painted whatever
+    /// happened to be on screen at that instant. Codex ends its frame with the
+    /// cursor still sitting in the middle of the word it is animating and only
+    /// parks it a moment later, so painting on the frame boundary stamped a
+    /// block cursor into the middle of every word - reliably, where a terminal
+    /// painting on a clock would simply never have looked at that moment.
+    ///
+    /// So this only marks the screen dirty. It runs on the pty thread and
+    /// touches nothing else, which is also the cheapest it has ever been.
+    /// </summary>
     private void OnOutputArrived()
+    {
+        _dirty = true;
+        if (Interlocked.CompareExchange(ref _invalidatePending, 1, 0) == 0)
+            DispatcherQueue.TryEnqueue(StartPainting);
+    }
+
+    private void StartPainting()
+    {
+        if (_paintTimer == null)
+        {
+            _paintTimer = DispatcherQueue.CreateTimer();
+            _paintTimer.Interval = TimeSpan.FromMilliseconds(PaintIntervalMs);
+            _paintTimer.IsRepeating = true;
+            _paintTimer.Tick += (_, _) => PaintTick();
+        }
+        if (!_paintTimer.IsRunning)
+            _paintTimer.Start();
+    }
+
+    private void PaintTick()
     {
         // Mid frame: the program has said it is still painting. Showing this
         // would be showing a cleared screen, or half a redraw, which is what
-        // flickering is made of. The sequence that ends the frame is itself
-        // output, so it brings us straight back here to paint the whole thing.
+        // flickering is made of. Keep the timer running so the frame lands as
+        // soon as it closes.
         var emulator = _session.Emulator;
         bool holding;
         lock (emulator.SyncRoot)
@@ -418,14 +462,19 @@ public sealed class TerminalView : UserControl, IDisposable
         }
         _holdingSince = 0;
 
-        if (Interlocked.CompareExchange(ref _invalidatePending, 1, 0) == 0)
+        if (!_dirty)
         {
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                Interlocked.Exchange(ref _invalidatePending, 0);
-                _canvas.Invalidate();
-            });
+            // Nothing has happened for a whole interval, so stop until it does.
+            // A repaint clock that never sleeps is a battery bug.
+            _paintTimer?.Stop();
+            Interlocked.Exchange(ref _invalidatePending, 0);
+            if (_dirty)
+                StartPainting(); // arrived in the gap; go round again
+            return;
         }
+
+        _dirty = false;
+        _canvas.Invalidate();
     }
 
     // ---------------------------------------------------------------- rendering
