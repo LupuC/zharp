@@ -1,5 +1,6 @@
 using System.Text;
 using Zharp.Core.Pty;
+using Zharp.Core.Remote;
 using Zharp.Core.Terminal;
 
 namespace Zharp.App;
@@ -31,9 +32,36 @@ public sealed class TerminalSession : IDisposable
     /// </summary>
     public string SessionKey { get; } = Guid.NewGuid().ToString("N");
 
-    /// <summary>Shell-reported current directory; falls back to the start directory.</summary>
+    /// <summary>Shell-reported current directory; falls back to the start directory.
+    /// Always a path on this machine: see <see cref="Location"/> for where the
+    /// session actually is once it has been sent somewhere over ssh.</summary>
     public string? WorkingDirectory { get; private set; }
     public bool IsStarted => _pty != null;
+
+    /// <summary>
+    /// Where this session is standing, machine included.
+    ///
+    /// <see cref="WorkingDirectory"/> only ever describes this computer, which
+    /// stops being true the moment the user types `ssh`. Everything that asks
+    /// a question about the directory, rather than just displaying it, should
+    /// ask this instead.
+    /// </summary>
+    public SessionLocation? Location { get; private set; }
+
+    /// <summary>Raised when the session changes machine or directory.</summary>
+    public event Action<SessionLocation?>? LocationChanged;
+
+    /// <summary>
+    /// The machine an `ssh` typed at this prompt went to, until a prompt comes
+    /// back here. Zharp knows the command because it already reads the prompt
+    /// line for history, which means this works on a plain server that reports
+    /// nothing about itself.
+    /// </summary>
+    private RemoteHost? _remote;
+
+    /// <summary>Where the user is on <see cref="_remote"/>, when anything over
+    /// there has said so. Empty is a normal state, not a failure.</summary>
+    private string _remotePath = "";
 
     /// <summary>When true, NO_COLOR is stripped from the child environment.</summary>
     public bool OverrideNoColor { get; set; } = true;
@@ -73,23 +101,105 @@ public sealed class TerminalSession : IDisposable
         _commandLine = commandLine;
         _workingDirectory = workingDirectory;
         WorkingDirectory = workingDirectory;
+        Location = SessionLocation.Local(workingDirectory);
         Title = initialTitle;
         Emulator = new TerminalEmulator(120, 30, Math.Max(100, scrollbackLines));
         Emulator.TitleChanged += title =>
         {
             Title = string.IsNullOrWhiteSpace(title) ? Title : title;
+            NoteTitle(Title);
             TitleChanged?.Invoke(Title);
         };
         Emulator.WorkingDirectoryChanged += cwd =>
         {
+            // OSC 7 from a shell on another machine describes that machine.
+            // Only a local report is allowed to move the local directory.
+            if (Emulator.WorkingDirectoryHost is { Length: > 0 } host)
+            {
+                _remote ??= RemoteHost.Reported(host);
+                _remotePath = cwd;
+                UpdateLocation();
+                return;
+            }
+
             WorkingDirectory = cwd;
+            UpdateLocation();
             WorkingDirectoryChanged?.Invoke(cwd);
         };
         Emulator.ResponseRequested += WriteRaw;
-        Emulator.CommandExecuted += cmd => CommandExecuted?.Invoke(cmd);
+        Emulator.CommandExecuted += cmd =>
+        {
+            NoteCommand(cmd);
+            CommandExecuted?.Invoke(cmd);
+        };
         Emulator.BellRang += () => Bell?.Invoke();
         Emulator.AgentReported += payload => AgentReported?.Invoke(payload);
-        Emulator.PromptReturned += () => PromptReturned?.Invoke();
+        Emulator.PromptReturned += () =>
+        {
+            // The local shell has drawn a new prompt, so anything it was
+            // running, ssh included, has exited. This is the only signal that
+            // cannot be missed: a remote shell need not say goodbye, and the
+            // user may have closed the connection by pulling a cable.
+            LeaveRemote();
+            PromptReturned?.Invoke();
+        };
+    }
+
+    /// <summary>
+    /// Notices an `ssh` being run, from the command line the user typed.
+    ///
+    /// Fires both when Enter is pressed and again when the block finishes, in
+    /// that order, and the second one is harmless: the prompt that ends the
+    /// block clears the host straight afterwards.
+    /// </summary>
+    private void NoteCommand(string command)
+    {
+        if (SshTarget.Parse(command) is not { } host)
+            return;
+        _remote = host;
+        _remotePath = "";
+        UpdateLocation();
+    }
+
+    /// <summary>
+    /// Takes the directory out of a remote shell's window title.
+    ///
+    /// Only consulted while the session is known to be elsewhere. A title is
+    /// something any program can set to anything, so it is a hint about a
+    /// machine already established, never the thing that establishes it.
+    /// </summary>
+    private void NoteTitle(string title)
+    {
+        if (_remote == null)
+            return;
+
+        var (host, path) = PromptTitle.Parse(title);
+        if (host == null || path == null || path == _remotePath)
+            return;
+
+        _remotePath = path;
+        UpdateLocation();
+    }
+
+    private void LeaveRemote()
+    {
+        if (_remote == null)
+            return;
+        _remote = null;
+        _remotePath = "";
+        UpdateLocation();
+    }
+
+    private void UpdateLocation()
+    {
+        var next = _remote != null
+            ? SessionLocation.On(_remote, _remotePath)
+            : SessionLocation.Local(WorkingDirectory);
+
+        if (Equals(next, Location))
+            return;
+        Location = next;
+        LocationChanged?.Invoke(next);
     }
 
     public void EnsureStarted(int cols, int rows)
@@ -210,13 +320,19 @@ public sealed class TerminalSession : IDisposable
         // Enter executes whatever is typed at the prompt: capture it NOW.
         // Waiting for the next prompt mark loses commands that clear the
         // screen (cls, clear) before it arrives.
-        if (CommandExecuted != null && text.IndexOf('\r') >= 0)
+        if (text.IndexOf('\r') >= 0)
         {
-            string? pending = null;
+            string? pending;
             lock (Emulator.SyncRoot)
                 pending = Emulator.PeekPendingCommand();
             if (pending != null)
-                CommandExecuted(pending);
+            {
+                // Before the subscriber check: this is the moment an `ssh`
+                // becomes true, and it has to be noticed whether or not
+                // anything happens to be listening for history.
+                NoteCommand(pending);
+                CommandExecuted?.Invoke(pending);
+            }
         }
         UserTyped?.Invoke();
         WriteRaw(text);

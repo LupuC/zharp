@@ -1,4 +1,5 @@
 using System.Text;
+using Zharp.Core.Remote;
 using Zharp.Core.Terminal;
 
 // Deterministic emulator smoke tests. Exit code = number of failures.
@@ -590,6 +591,247 @@ static string Vis(string s) => s.Replace("\x1b", "<ESC>");
     // The shell getting its prompt back means the program is gone.
     Feed(e, "\r\n\x1b]133;A\x07$ ");
     Check(!e.FullScreenPaint, "a returned prompt clears it");
+}
+
+// ---------------------------------------------------------------------------
+// Knowing which machine a session is on.
+// ---------------------------------------------------------------------------
+{
+    var e = NewEmu();
+
+    // OSC 7 with no host, and with this machine's own name, both describe
+    // this computer. The empty host is what the file URI scheme says means
+    // local, and a shell reporting our own hostname is not elsewhere either.
+    Feed(e, "\x1b]7;file:///C:/work/app\x07");
+    Check(e.WorkingDirectory == "C:\\work\\app", "OSC 7 with no host stays a Windows path");
+    Check(e.WorkingDirectoryHost == null, "and is not treated as remote");
+
+    Feed(e, $"\x1b]7;file://{Environment.MachineName}/C:/work/two\x07");
+    Check(e.WorkingDirectoryHost == null, "our own hostname is not another machine");
+
+    // The half that used to be thrown away.
+    Feed(e, "\x1b]7;file://srv1/home/claudiu/proj\x07");
+    Check(e.WorkingDirectoryHost == "srv1", "OSC 7 keeps the host it was given");
+    Check(e.WorkingDirectory == "/home/claudiu/proj",
+        "and leaves a remote path in the far end's own notation");
+
+    // Percent escapes are the normal way a space arrives.
+    Feed(e, "\x1b]7;file://srv1/home/my%20work\x07");
+    Check(e.WorkingDirectory == "/home/my work", "escaped characters are decoded");
+
+    // OSC 9;9 has no host field at all, so it can only ever be local. A
+    // remote path arriving through it would be a local path by definition.
+    Feed(e, "\x1b]9;9;C:\\other\x07");
+    Check(e.WorkingDirectoryHost == null, "OSC 9;9 always describes this machine");
+}
+
+// ---------------------------------------------------------------------------
+// Reading the ssh command the user typed.
+// ---------------------------------------------------------------------------
+{
+    Check(SshTarget.Parse("ssh srv1") is { Label: "srv1" }, "a bare destination");
+    Check(SshTarget.Parse("ssh claudiu@10.0.0.4") is { Label: "10.0.0.4" },
+        "the user@ half is not part of the name");
+    Check(SshTarget.Parse("ssh ssh://me@box:2222") is { Label: "box" }, "a URL destination");
+
+    // The port has to be skipped or it reads as the machine.
+    var ported = SshTarget.Parse("ssh -p 2222 srv1");
+    Check(ported is { Label: "srv1" }, "a flag value is not mistaken for the destination");
+    Check(ported != null && ported.Args.SequenceEqual(new[] { "-p", "2222", "srv1" }),
+        "and the port is carried to our own connection");
+
+    // Glued and clustered short flags.
+    Check(SshTarget.Parse("ssh -p2222 srv1") is { Label: "srv1" }, "a glued flag value");
+    var clustered = SshTarget.Parse("ssh -46C srv1");
+    Check(clustered is { Label: "srv1" }, "clustered flags");
+    Check(clustered != null && clustered.Args.SequenceEqual(new[] { "-4", "-6", "-C", "srv1" }),
+        "each one kept separately");
+
+    // Identity and jump host are exactly the flags that decide whether a
+    // second connection reaches the same place, so they carry over.
+    var keyed = SshTarget.Parse("ssh -i \"C:\\My Keys\\id_ed25519\" -J bastion srv1");
+    Check(keyed != null && keyed.Args.SequenceEqual(
+        new[] { "-i", "C:\\My Keys\\id_ed25519", "-J", "bastion", "srv1" }),
+        "a quoted key path survives, and so does the jump host");
+
+    // Forwards must NOT carry over: opening them again either fails on a
+    // bound port or silently duplicates what the user set up.
+    var forwarded = SshTarget.Parse("ssh -L 8080:localhost:80 srv1");
+    Check(forwarded != null && forwarded.Args.SequenceEqual(new[] { "srv1" }),
+        "a port forward is dropped from our own connection");
+
+    // Invocations that never produce a shell to be standing in.
+    Check(SshTarget.Parse("ssh -N -L 9000:localhost:9000 srv1") == null, "a tunnel is not a session");
+    Check(SshTarget.Parse("ssh -O exit srv1") == null, "a control command is not a session");
+    Check(SshTarget.Parse("ssh -W host:22 srv1") == null, "a stdio forward is not a session");
+
+    // The rest of the family never connects anywhere.
+    Check(SshTarget.Parse("ssh-keygen -t ed25519") == null, "ssh-keygen is not ssh");
+    Check(SshTarget.Parse("ssh-add ~/.ssh/id_ed25519") == null, "ssh-add is not ssh");
+    Check(SshTarget.Parse("git status") == null, "and neither is anything else");
+    Check(SshTarget.Parse("ssh") == null, "ssh with no destination goes nowhere");
+
+    // A full path to the program, which is what a completion may produce.
+    Check(SshTarget.Parse("C:\\Windows\\System32\\OpenSSH\\ssh.exe srv1") is { Label: "srv1" },
+        "a fully qualified ssh");
+
+    // A remote command still means the user went to that machine.
+    Check(SshTarget.Parse("ssh srv1 uptime") is { Label: "srv1" }, "a trailing command keeps the host");
+    var withCommand = SshTarget.Parse("ssh srv1 uptime");
+    Check(withCommand != null && withCommand.Args.SequenceEqual(new[] { "srv1" }),
+        "but the command itself is not ours to run");
+}
+
+// ---------------------------------------------------------------------------
+// Reading a remote shell's window title, the fallback when OSC 7 is absent.
+// ---------------------------------------------------------------------------
+{
+    // What Debian and Ubuntu put there without anyone configuring anything.
+    var (host, path) = PromptTitle.Parse("claudiu@srv1: ~/work/proj");
+    Check(host == "srv1" && path == "~/work/proj", "the default Debian title");
+
+    (host, path) = PromptTitle.Parse("srv1:/var/www");
+    Check(host == "srv1" && path == "/var/www", "a bare host and an absolute path");
+
+    // Things that are not locations, which a title very often is.
+    Check(PromptTitle.Parse("make: *** [all] Error 1").Host == null, "an error message is not a location");
+    Check(PromptTitle.Parse("nvim").Host == null, "a program name is not a location");
+    Check(PromptTitle.Parse("Zharp").Host == null, "and neither is ours");
+    Check(PromptTitle.Parse("weird host: ~/x").Host == null, "a hostname has no spaces in it");
+    Check(PromptTitle.Parse(null).Host == null, "no title at all");
+}
+
+// ---------------------------------------------------------------------------
+// Paths on the other machine, which are not this machine's paths.
+// ---------------------------------------------------------------------------
+{
+    Check(PosixPath.GetFileName("/home/me/app/main.ts") == "main.ts", "the last segment");
+    Check(PosixPath.GetFileName("/home/me/app/") == "app", "a trailing slash is not a segment");
+
+    Check(PosixPath.IsUnder("/home/me/app", "/home/me/app/src/x.ts", out var rel)
+        && rel == "src/x.ts", "a file inside the repository");
+    Check(!PosixPath.IsUnder("/home/me/app", "/home/me/other/x.ts", out _),
+        "a file outside it");
+    Check(!PosixPath.IsUnder("/home/me/app", "/home/me/application/x.ts", out _),
+        "a sibling whose name starts the same way");
+    Check(!PosixPath.IsUnder("/home/me/app", "/home/me/App/x.ts", out _),
+        "the far end is case sensitive even though this one is not");
+
+    Check(PosixPath.ExpandHome("~/work", "/home/me") == "/home/me/work", "~ becomes the home directory");
+    Check(PosixPath.ExpandHome("~", "/home/me") == "/home/me", "~ on its own");
+    Check(PosixPath.ExpandHome("~other/work", "/home/me") == "~other/work",
+        "another user's home is not ours to guess");
+    Check(PosixPath.ExpandHome("/var/www", "/home/me") == "/var/www", "an absolute path is left alone");
+
+    // Everything sent over the wire is quoted, because a filename is allowed
+    // to contain the characters a shell acts on.
+    Check(ShellWords.Quote("plain") == "'plain'", "ordinary text");
+    Check(ShellWords.Quote("it's") == "'it'\\''s'", "a quote is closed, escaped and reopened");
+    Check(ShellWords.Quote("a; rm -rf /") == "'a; rm -rf /'", "a semicolon stays data");
+}
+
+// ---------------------------------------------------------------------------
+// A place is a machine and a path, never one without the other.
+// ---------------------------------------------------------------------------
+{
+    var srv = new RemoteHost("srv1", new[] { "srv1" });
+    var other = new RemoteHost("srv1", new[] { "-p", "2222", "srv1" });
+
+    Check(!srv.Equals(other), "the same name on a different port is a different machine");
+    Check(!RemoteHost.Reported("a").Equals(RemoteHost.Reported("b")),
+        "two machines we only heard about stay distinct");
+    Check(!RemoteHost.Reported("srv1").CanConnect,
+        "a machine that only announced itself is never dialled");
+    Check(srv.CanConnect, "one the user reached is");
+
+    Check(!Equals(SessionLocation.On(srv, "/home/me"), SessionLocation.Local("/home/me")),
+        "the same path on two machines is two places");
+    Check(Equals(SessionLocation.Local("C:\\Work"), SessionLocation.Local("c:\\work")),
+        "local paths compare the way Windows does");
+    Check(!Equals(SessionLocation.On(srv, "/A"), SessionLocation.On(srv, "/a")),
+        "remote paths compare the way the far end does");
+    Check(!SessionLocation.On(srv, "").HasPath,
+        "being on a machine without knowing where is a real state");
+}
+
+// ---------------------------------------------------------------------------
+// The ssh transport itself, run against a real POSIX shell.
+//
+// ZHARP_SSH points the channel at a stub that ignores the connection flags and
+// starts a local sh, so everything below this line is the actual code path a
+// remote session takes: the handshake, the framing, the base64 that keeps a
+// filename with a newline in it from being read as the end of an answer, and
+// the quoting. Only the network is missing.
+//
+// Skipped rather than failed when there is no POSIX shell here, so that this
+// never reports a problem with Zharp when the problem is the machine.
+// ---------------------------------------------------------------------------
+{
+    string? sh = new[]
+    {
+        @"C:\Program Files\Git\usr\bin\sh.exe",
+        @"C:\Program Files\Git\bin\sh.exe",
+    }.FirstOrDefault(File.Exists);
+
+    if (sh == null)
+    {
+        Console.WriteLine("SKIP  ssh transport (no POSIX shell on this machine)");
+    }
+    else
+    {
+        // A real remote has coreutils on its PATH already; a Git for Windows
+        // shell started from outside its own launcher does not, so the stub
+        // puts them there. Nothing about the transport depends on this.
+        string tools = Path.GetDirectoryName(sh)!;
+        string stub = Path.Combine(Path.GetTempPath(), "zharp-ssh-stub.cmd");
+        File.WriteAllText(stub,
+            "@echo off\r\nset PATH=" + tools + ";%PATH%\r\n\"" + sh + "\"\r\n");
+        Environment.SetEnvironmentVariable("ZHARP_SSH", stub);
+
+        var host = new RemoteHost("stub", new[] { "stub" });
+        using var channel = await SshGitChannel.ConnectAsync(host, CancellationToken.None);
+
+        Check(channel.IsUsable, "the channel connects and agrees on a protocol");
+        if (!channel.IsUsable)
+            Console.WriteLine($"      (channel problem: {channel.Problem})");
+        Check(!string.IsNullOrEmpty(channel.Home), "and reports the home directory");
+
+        // A path with a space, which is the ordinary reason naive quoting
+        // breaks, and the repository this is running from.
+        string temp = Path.Combine(Path.GetTempPath(), "zharp remote test");
+        Directory.CreateDirectory(temp);
+        string posixTemp = "/" + char.ToLowerInvariant(temp[0]) + temp[2..].Replace('\\', '/');
+
+        string echoed = (await channel.RunAsync(posixTemp, new[] { "pwd" }, default)).Trim();
+        Check(echoed.EndsWith("zharp remote test", StringComparison.Ordinal),
+            "a directory with a space in it is quoted correctly");
+
+        // Bytes that would break a line-oriented protocol: the marker word
+        // itself, and a newline in the middle of the payload.
+        string tricky = await channel.RunAsync(posixTemp,
+            new[] { "printf", "one\\ntwo ZHARP-END three\\n" }, default);
+        Check(tricky == "one\ntwo ZHARP-END three\n",
+            "output survives newlines and text that looks like the frame marker");
+
+        // Nothing on stdout is a normal answer, not a broken one.
+        Check(await channel.RunAsync(posixTemp, new[] { "true" }, default) == "",
+            "a command that prints nothing returns nothing");
+        Check(await channel.RunAsync("/no/such/directory", new[] { "pwd" }, default) == "",
+            "a directory that is not there returns nothing");
+
+        // The channel stays usable across all of that: one connection serving
+        // many questions is the entire point of it.
+        Check(channel.IsUsable, "and the connection is still good afterwards");
+
+        // Non-ASCII has to survive the round trip, since it is what filenames
+        // in half the world are made of.
+        string unicode = await channel.RunAsync(posixTemp,
+            new[] { "printf", "café ünïcode 日本\\n" }, default);
+        Check(unicode.Trim() == "café ünïcode 日本", "and so does UTF-8");
+
+        Environment.SetEnvironmentVariable("ZHARP_SSH", null);
+        try { Directory.Delete(temp); File.Delete(stub); } catch { }
+    }
 }
 
 Console.WriteLine();

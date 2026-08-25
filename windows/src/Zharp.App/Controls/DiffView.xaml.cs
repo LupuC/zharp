@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
+using Zharp.Core.Remote;
 using Zharp.Core.Terminal;
 
 namespace Zharp.App.Controls;
@@ -86,8 +87,8 @@ public sealed partial class DiffView : UserControl
     private readonly DispatcherQueue _dispatcher = DispatcherQueue.GetForCurrentThread();
     private readonly DispatcherQueueTimer _poll;
 
-    private string? _repoRoot;
-    private string? _pendingCwd;
+    private SessionLocation? _repoRoot;
+    private SessionLocation? _pendingCwd;
     private CancellationTokenSource? _work;
     /// <summary>
     /// Deliberately not readonly. A List is not observable, so assigning the
@@ -123,6 +124,15 @@ public sealed partial class DiffView : UserControl
     /// file in an editor shows up without asking.
     /// </summary>
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// The same idea over ssh, slowed down. Two seconds is chosen against the
+    /// cost of running git on a local disk; the same rate against a machine
+    /// across a network is a steady trickle of traffic and remote processes
+    /// for a panel nobody may be looking at. Six seconds still catches a save
+    /// before you have finished looking away.
+    /// </summary>
+    private static readonly TimeSpan RemotePollInterval = TimeSpan.FromSeconds(6);
 
     public DiffView()
     {
@@ -160,26 +170,41 @@ public sealed partial class DiffView : UserControl
     /// </summary>
     public async Task FollowAsync(string absolutePath)
     {
-        if (_repoRoot is not { Length: > 0 } repo)
+        if (_repoRoot is not { } repo)
             return;
 
-        string full;
-        try
+        string relative;
+        if (repo.IsRemote)
         {
-            full = System.IO.Path.GetFullPath(absolutePath);
+            // An agent running over there reports that machine's paths, which
+            // must not be run through Windows path handling: it would turn
+            // /home/me/app.ts into C:\home\me\app.ts and then decide the agent
+            // was editing outside the repository.
+            if (!PosixPath.IsUnder(repo.Path, absolutePath, out relative))
+                return;
         }
-        catch (Exception)
+        else
         {
-            return; // not a path we can make sense of
+            string full;
+            try
+            {
+                full = System.IO.Path.GetFullPath(absolutePath);
+            }
+            catch (Exception)
+            {
+                return; // not a path we can make sense of
+            }
+
+            string root = System.IO.Path.GetFullPath(repo.Path)
+                .TrimEnd(System.IO.Path.DirectorySeparatorChar);
+            if (!full.StartsWith(root + System.IO.Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase))
+                return; // the agent is editing outside the repository on screen
+
+            relative = full[(root.Length + 1)..].Replace('\\', '/');
         }
 
-        string root = System.IO.Path.GetFullPath(repo)
-            .TrimEnd(System.IO.Path.DirectorySeparatorChar);
-        if (!full.StartsWith(root + System.IO.Path.DirectorySeparatorChar,
-                StringComparison.OrdinalIgnoreCase))
-            return; // the agent is editing outside the repository on screen
-
-        _following = full[(root.Length + 1)..].Replace('\\', '/');
+        _following = relative;
         _followTries = 3;
 
         // Quiet, because the file set usually has not changed: the agent edits
@@ -217,13 +242,14 @@ public sealed partial class DiffView : UserControl
         FileList.ScrollIntoView(_rows[index]);
     }
 
-    /// <summary>Points the view at the directory the active session is in.</summary>
-    public async Task SetWorkingDirectoryAsync(string? cwd)
+    /// <summary>Points the view at wherever the active session is standing,
+    /// which may be on another machine.</summary>
+    public async Task SetLocationAsync(SessionLocation? where)
     {
-        if (string.Equals(_pendingCwd, cwd, StringComparison.OrdinalIgnoreCase))
+        if (Equals(_pendingCwd, where))
             return;
         RememberPlace();
-        _pendingCwd = cwd;
+        _pendingCwd = where;
 
         // A pending follow belongs to the session being left. Carrying it into
         // the next one would open a file the user never asked about.
@@ -252,12 +278,13 @@ public sealed partial class DiffView : UserControl
             if (ct.IsCancellationRequested)
                 return;
 
+            _poll.Interval = _pendingCwd is { IsRemote: true } ? RemotePollInterval : PollInterval;
+
             if (_repoRoot == null)
             {
                 _following = null;
                 SetTotals(0, 0);
-                ShowEmpty("Not a git repository",
-                    "Open a session inside one and this fills in.");
+                await ShowNothingHereAsync(ct);
                 return;
             }
 
@@ -266,9 +293,9 @@ public sealed partial class DiffView : UserControl
             if (ct.IsCancellationRequested)
                 return;
 
-            RepoText.Text = System.IO.Path.GetFileName(
-                _repoRoot.TrimEnd(System.IO.Path.DirectorySeparatorChar));
+            RepoText.Text = _repoRoot.DisplayName;
             BranchText.Text = branch is { Length: > 0 } ? $"on {branch}" : "";
+            ShowHost(_repoRoot.Remote?.Label);
 
             if (changes.Count == 0)
             {
@@ -332,7 +359,7 @@ public sealed partial class DiffView : UserControl
                 // it here rather than afterwards avoids selecting twice.
                 string? want = _following ?? selectedPath;
                 if (want == null && _repoRoot != null
-                    && _placeInRepo.TryGetValue(_repoRoot, out var place))
+                    && _placeInRepo.TryGetValue(_repoRoot.ToString(), out var place))
                     want = place.Path;
 
                 int keep = want == null
@@ -387,6 +414,12 @@ public sealed partial class DiffView : UserControl
         if (_repoRoot == null)
             return;
 
+        if (_repoRoot.IsRemote)
+        {
+            await FillCountsRemotelyAsync(_repoRoot, ct, quiet);
+            return;
+        }
+
         int added = 0, removed = 0;
 
         foreach (var row in _rows.ToArray())
@@ -408,6 +441,53 @@ public sealed partial class DiffView : UserControl
             {
                 // Unreadable file: count it as nothing rather than stop.
             }
+
+            added += a;
+            removed += r;
+
+            bool moved = row.Change.Added != a || row.Change.Removed != r;
+            row.Change.Added = a;
+            row.Change.Removed = r;
+            if (moved || !quiet)
+                row.CountsArrived();
+        }
+
+        if (!ct.IsCancellationRequested)
+            SetTotals(added, removed);
+    }
+
+    /// <summary>
+    /// The same counts, in one question instead of one per file.
+    ///
+    /// Reading a diff per row is affordable when each one is a local process
+    /// and the answer comes back in single milliseconds. Over ssh it is a
+    /// round trip each, repeated every poll, so twenty changed files would
+    /// mean twenty crossings of the network to put small grey numbers beside
+    /// twenty rows. `git diff --numstat` answers for the whole tree at once.
+    ///
+    /// Untracked files are absent from it, because git has nothing to compare
+    /// them against, and are counted individually. There are usually none, and
+    /// a handful at most.
+    /// </summary>
+    private async Task FillCountsRemotelyAsync(
+        SessionLocation repo, CancellationToken ct, bool quiet)
+    {
+        var totals = await GitStatus.NumstatAsync(repo, ct);
+        if (ct.IsCancellationRequested)
+            return;
+
+        int added = 0, removed = 0;
+
+        foreach (var row in _rows.ToArray())
+        {
+            if (ct.IsCancellationRequested)
+                return;
+
+            int a = 0, r = 0;
+            if (totals.TryGetValue(row.Path, out var counted))
+                (a, r) = counted;
+            else if (row.Change.Kind == GitChangeKind.Untracked)
+                a = await GitStatus.CountUntrackedAsync(repo, row.Path, ct);
 
             added += a;
             removed += r;
@@ -472,11 +552,11 @@ public sealed partial class DiffView : UserControl
     /// <summary>Stores where the current repository is being left.</summary>
     private void RememberPlace()
     {
-        if (_repoRoot is not { Length: > 0 } repo)
+        if (_repoRoot is not { } repo)
             return;
         if (FileList.SelectedItem is not DiffFileRow row)
             return;
-        _placeInRepo[repo] = (row.Path, DiffScroll.VerticalOffset);
+        _placeInRepo[repo.ToString()] = (row.Path, DiffScroll.VerticalOffset);
     }
 
     private string? _shownPath;
@@ -511,7 +591,7 @@ public sealed partial class DiffView : UserControl
             // move past content it has not laid out yet, so the offset has to
             // wait for the paragraphs just added to exist.
             if (!sameFile && _repoRoot != null
-                && _placeInRepo.TryGetValue(_repoRoot, out var place)
+                && _placeInRepo.TryGetValue(_repoRoot.ToString(), out var place)
                 && place.Path == row.Path && place.Scroll > 0)
             {
                 double target = place.Scroll;
@@ -935,6 +1015,67 @@ public sealed partial class DiffView : UserControl
         EmptyState.Visibility = Visibility.Collapsed;
         FileList.Visibility = Visibility.Visible;
         DiffScroll.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// Says why there is no file list, which over ssh is rarely "not a git
+    /// repository".
+    ///
+    /// The distinction matters because each of these has a different thing the
+    /// user can do about it, and the panel used to answer all of them by
+    /// showing the last local repository it had seen: the one wrong answer
+    /// that looks exactly like a right one.
+    /// </summary>
+    private async Task ShowNothingHereAsync(CancellationToken ct)
+    {
+        var at = _pendingCwd;
+        ShowHost(at?.Remote?.Label);
+
+        if (at is not { IsRemote: true })
+        {
+            ShowEmpty("Not a git repository",
+                "Open a session inside one and this fills in.");
+            return;
+        }
+
+        string host = at.Remote!.Label;
+        RepoText.Text = "";
+        BranchText.Text = "";
+
+        if (!at.Remote.CanConnect)
+        {
+            ShowEmpty($"Connected to {host}",
+                "Zharp did not see the ssh command that got here, so it has no way to reach the same machine on its own.");
+            return;
+        }
+
+        if (await GitStatus.RemoteProblemAsync(at.Remote, ct) is { Length: > 0 } problem)
+        {
+            ShowEmpty($"Cannot read git on {host}", problem);
+            return;
+        }
+
+        if (!at.HasPath)
+        {
+            ShowEmpty($"Somewhere on {host}",
+                "The shell over there has not said which directory it is in. Zharp reads OSC 7, and the window title as a fallback.");
+            return;
+        }
+
+        ShowEmpty("Not a git repository",
+            $"{at.Path} on {host} is not inside one.");
+    }
+
+    /// <summary>
+    /// Names the machine in the header while the panel is showing another
+    /// computer's work. Absent for a local repository, which is most of them:
+    /// a chip saying "this machine" on every session would be noise.
+    /// </summary>
+    private void ShowHost(string? label)
+    {
+        bool remote = !string.IsNullOrEmpty(label);
+        HostChip.Visibility = remote ? Visibility.Visible : Visibility.Collapsed;
+        HostText.Text = label ?? "";
     }
 
     private async void OnRefreshClick(object sender, RoutedEventArgs e) => await RefreshAsync();
