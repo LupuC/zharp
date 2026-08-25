@@ -549,7 +549,14 @@ public sealed partial class DiffView : UserControl
         // moment the numbers appeared and every measurement would be stale.
         GutterColumn.Width = new GridLength(Math.Max(2, widest) * 8.0 + 18.0);
 
-        PlaceGutter();
+        // The paragraphs have only just been built, so nothing has been
+        // arranged and a character rect would come back as zero. Running the
+        // layout now makes the measurement true immediately, which costs one
+        // pass and only happens when the diff has actually changed. If the
+        // panel has no size yet, nothing is arranged even so, and the gutter
+        // waits for the pass that does the work.
+        DiffText.UpdateLayout();
+        RefreshGutter();
 
         if (keepScroll)
             DiffScroll.ChangeView(null, scroll, null, disableAnimation: true);
@@ -574,6 +581,79 @@ public sealed partial class DiffView : UserControl
     /// That is the whole trick, and it is why wrapping and a separate gutter
     /// can coexist here at all.
     /// </summary>
+    /// <summary>
+    /// Asks to be told when the text has actually been laid out, so the gutter
+    /// can be placed against real positions.
+    ///
+    /// Measuring straight after building the paragraphs cannot work: they have
+    /// not been arranged yet, and an unarranged paragraph does not refuse the
+    /// question, it answers zero. Guessing at how long to wait does not work
+    /// either. The layout pass itself is the only thing that knows when the
+    /// answer became true, so it is what we listen to, and we stop listening
+    /// the moment it is.
+    /// </summary>
+    private void ArmGutter()
+    {
+        DiffText.LayoutUpdated -= OnGutterLayout;
+        DiffText.LayoutUpdated += OnGutterLayout;
+    }
+
+    /// <summary>
+    /// Runs on every layout pass in the window while armed, which is why it
+    /// asks one question rather than a thousand.
+    ///
+    /// Measuring the whole file here froze the app: a diff can be fifteen
+    /// hundred paragraphs, character rects are not cheap, and the terminal
+    /// painting behind the panel means layout passes keep coming. That is
+    /// fifteen hundred measurements per frame on the thread that draws.
+    /// </summary>
+    private void OnGutterLayout(object? sender, object e)
+    {
+        if (!GutterReady())
+            return;
+        DiffText.LayoutUpdated -= OnGutterLayout;
+        PlaceGutter();
+    }
+
+    /// <summary>
+    /// Whether the text has been arranged, from a single measurement.
+    ///
+    /// The last paragraph is the one that answers it: once the block has been
+    /// laid out it sits below all the others, so a Top of zero on it means
+    /// nothing has been arranged at all. An unarranged paragraph does not
+    /// refuse the question, it answers zero, which is what put every number in
+    /// the file on the first row.
+    /// </summary>
+    private bool GutterReady()
+    {
+        if (DiffText.Blocks.Count <= 1)
+            return true; // one line, or none: nothing can be ambiguous
+
+        for (int i = DiffText.Blocks.Count - 1; i >= 0; i--)
+        {
+            if (DiffText.Blocks[i] is not Paragraph para)
+                continue;
+            try
+            {
+                return para.ContentStart.GetCharacterRect(LogicalDirection.Forward).Top > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Places the numbers if the text is ready, or as soon as it is.</summary>
+    private void RefreshGutter()
+    {
+        if (GutterReady())
+            PlaceGutter();
+        else
+            ArmGutter();
+    }
+
     private void PlaceGutter()
     {
         GutterCanvas.Children.Clear();
@@ -581,6 +661,13 @@ public sealed partial class DiffView : UserControl
             return;
 
         double width = GutterColumn.Width.Value;
+
+        // Measured first, placed second. A paragraph that has not been laid
+        // out yet does NOT throw when asked where it is: it answers with an
+        // empty rect, whose Top is zero. Placing as each one was measured
+        // therefore stacked every number in the file onto the first row, in a
+        // single unreadable smudge, and the catch below never ran.
+        var placed = new List<(string Number, double Y)>(_numbers.Count);
 
         for (int i = 0; i < DiffText.Blocks.Count && i < _numbers.Count; i++)
         {
@@ -604,6 +691,11 @@ public sealed partial class DiffView : UserControl
                 continue; // not realised yet; the next layout pass catches it
             }
 
+            placed.Add((number, y));
+        }
+
+        foreach (var (number, y) in placed)
+        {
             var label = new TextBlock
             {
                 Text = number,
@@ -627,7 +719,12 @@ public sealed partial class DiffView : UserControl
     /// dragged and a font change alike, without any of them needing to know
     /// about the gutter.
     /// </summary>
-    private void OnDiffTextSizeChanged(object sender, SizeChangedEventArgs e) => PlaceGutter();
+    /// <summary>
+    /// A resize reflows the text, so every measured position is stale. No
+    /// UpdateLayout here: this runs during a layout pass, and asking for
+    /// another one from inside it is how you get a reentrant mess.
+    /// </summary>
+    private void OnDiffTextSizeChanged(object sender, SizeChangedEventArgs e) => RefreshGutter();
 
     /// <summary>
     /// Reads "@@ -12,7 +34,9 @@" and returns the first old and new line the
