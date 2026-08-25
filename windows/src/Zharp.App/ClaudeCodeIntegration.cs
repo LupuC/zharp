@@ -41,6 +41,39 @@ public static class ClaudeCodeIntegration
 
     private const string ScriptName = "zharp-agent.ps1";
 
+    /// <summary>
+    /// Installs the hooks if they are missing or stale, unless the user has
+    /// turned the integration off.
+    ///
+    /// This runs at startup without asking, which is a decision worth stating:
+    /// an integration you have to go and find is one nobody switches on, and
+    /// the whole value here is that Zharp knows what your agent is doing
+    /// without you having set anything up. What makes it defensible is that it
+    /// is narrow and reversible - it adds hooks that do nothing outside Zharp,
+    /// touches no other part of the file, keeps a backup, and turning it off in
+    /// Settings takes them straight back out and keeps them out.
+    /// </summary>
+    public static void Sync(bool enabled)
+    {
+        try
+        {
+            if (!enabled)
+                return;
+            if (!IsClaudeCodePresent)
+                return; // do not create a Claude config for someone without Claude
+            if (IsCurrent())
+                return;
+
+            Connect();
+            App.Log($"claude code: hooks installed at {SettingsPath}");
+        }
+        catch (Exception ex)
+        {
+            // Never worth failing a launch over.
+            App.Log($"claude code: could not install hooks: {ex.Message}");
+        }
+    }
+
     /// <summary>The hook script, shipped next to the executable.</summary>
     public static string ScriptPath { get; } = Path.Combine(
         AppContext.BaseDirectory, "Integrations", "ClaudeCode", ScriptName);
@@ -84,6 +117,57 @@ public static class ClaudeCodeIntegration
             App.Log($"claude code: could not read settings: {ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// Connected on every event, by this build, at this path.
+    ///
+    /// Stricter than <see cref="IsConnected"/> on purpose: it is the question
+    /// "is there anything to do", and the answer is yes after an update moves
+    /// the executable, after a partial write, and after a new event is added to
+    /// the list above. All three leave hooks that look installed and are stale.
+    /// </summary>
+    public static bool IsCurrent()
+    {
+        try
+        {
+            if (Read() is not { } root || root["hooks"] is not JsonObject hooks)
+                return false;
+
+            foreach (var (name, kind, _) in Hooks)
+            {
+                if (hooks[name] is not JsonArray groups)
+                    return false;
+                if (!groups.Any(g => RunsExactly(g, kind)))
+                    return false;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            App.Log($"claude code: could not read settings: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>This exact script, at this exact path, for this exact event.</summary>
+    private static bool RunsExactly(JsonNode? group, string kind)
+    {
+        if (group is not JsonObject obj || obj["hooks"] is not JsonArray hooks)
+            return false;
+
+        foreach (var hook in hooks)
+        {
+            if (hook is not JsonObject h || h["args"] is not JsonArray args)
+                continue;
+
+            var values = args.Select(a => a?.GetValue<string>()).ToList();
+            int at = values.FindIndex(v =>
+                string.Equals(v, ScriptPath, StringComparison.OrdinalIgnoreCase));
+            if (at >= 0 && at + 1 < values.Count && values[at + 1] == kind)
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

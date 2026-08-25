@@ -661,6 +661,7 @@ public sealed partial class MainWindow : Window
         }
         else
         {
+            item.StopAgentClock();
             item.View!.Dispose();
             item.Session!.Dispose();
         }

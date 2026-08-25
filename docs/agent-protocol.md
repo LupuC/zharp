@@ -47,13 +47,19 @@ Events:
 | Event | Fires when | Zharp shows |
 |---|---|---|
 | `start` | the agent starts in this session | the agent's logo on the tab |
-| `prompt` | a prompt is submitted | working |
+| `prompt` | a prompt is submitted | working, with the turn clock running |
 | `tool` | a tool that writes a file finished | the file it wrote, and the changes panel follows it |
-| `permission` | the agent is blocked asking permission | **needs you** |
-| `idle` | the agent has been waiting long enough to say so | **needs you** |
-| `done` | the turn ended | done, in green |
+| `permission` | the agent is blocked asking permission | **needs you**, and how long it has been waiting |
+| `idle` | the agent has been waiting long enough to say so | **needs you**, and how long it has been waiting |
+| `done` | the turn ended | done, in green, with how long the turn took |
 | `error` | the turn ended on an error | **needs you** |
 | `end` | the agent exited | nothing; the tab goes back to being a shell |
+
+Every state carries an elapsed time, but not the same one, because the useful
+number is different in each. While the agent works it counts from the prompt,
+so moving between tools does not reset it. While it is blocked it counts from
+the moment it blocked, because "waiting 4m" is the number that makes you go
+look. When the turn ends it freezes at the total.
 
 "Needs you" is the only state that badges the tab, flashes the taskbar and
 raises a notification, and it is the reason the protocol exists. Everything
@@ -97,10 +103,30 @@ that is the `terminalSequence` field:
 
 ### Claude Code
 
-Implemented. The hook script ships with Zharp at
-`Integrations/ClaudeCode/zharp-agent.ps1` and is installed from
-**Settings → AI agents**, which adds hook entries to `~/.claude/settings.json`
-and takes them back out again on disconnect.
+Implemented, and on by default. The hook script ships with Zharp at
+`Integrations/ClaudeCode/zharp-agent.ps1`, and Zharp installs the hooks into
+`~/.claude/settings.json` at startup without being asked.
+
+That is a deliberate choice and worth defending, because writing to somebody
+else's config file usually is not one. An integration you have to go and find
+is one almost nobody switches on, and the entire value here is that Zharp knows
+what your agent is doing without you having set anything up. What makes it
+acceptable is that it is narrow and reversible:
+
+- only hook entries are added; every other key in the file is left exactly as
+  it was, including hooks the user wrote themselves on the same events
+- a copy of the original is kept beside it the first time Zharp touches it
+- the write is a move over the top, so a crash halfway cannot truncate it
+- the hooks do nothing in any other terminal, because the script exits
+  immediately when `ZHARP_AGENT_PROTOCOL` is absent
+- **Settings → AI agents** turns it off, which removes the hooks and keeps them
+  removed on later startups
+- nothing is written at all if Claude Code is not installed
+
+Startup also repairs the hooks rather than only adding them. An update moves
+the executable, which leaves hooks pointing at a script path that no longer
+exists; those look installed but are dead, so Zharp checks that each hook names
+the current script and rewrites the set when any of them does not.
 
 | Zharp event | Claude Code hook | Matcher |
 |---|---|---|

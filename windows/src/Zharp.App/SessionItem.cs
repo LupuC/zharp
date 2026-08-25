@@ -144,6 +144,7 @@ public sealed class SessionItem : INotifyPropertyChanged
         Content = view;
         Title = displayName;
         ShellId = shellId;
+        _dispatcher = dispatcher;
         IconGlyph = "\uEBEF"; // terminal-2
         _subtitle = Abbreviate(session.WorkingDirectory);
 
@@ -248,6 +249,13 @@ public sealed class SessionItem : INotifyPropertyChanged
     {
         _reports = true;
         _lastEvent = report.Event;
+        _stateSince = DateTime.UtcNow;
+
+        // A turn begins at the prompt. Everything after it is measured from
+        // there, so "how long has this been going" survives the agent moving
+        // from tool to tool.
+        if (report.Event is AgentEvent.Prompt or AgentEvent.Start)
+            _turnStart = _stateSince;
 
         if (report.Event == AgentEvent.End)
         {
@@ -272,11 +280,114 @@ public sealed class SessionItem : INotifyPropertyChanged
             NotifyDisplayChanged();
 
         NeedsAttention = report.NeedsAttention;
-        SetAgentStatus(report.Summary.Length > 0 ? report.Summary : null);
+        _agentSummary = report.Summary.Length > 0 ? report.Summary : null;
+        RefreshAgentClock();
 
         if (report.Path is { Length: > 0 } path)
             AgentTouchedFile?.Invoke(this, path);
     }
+
+    private readonly DispatcherQueue? _dispatcher;
+    private DispatcherQueueTimer? _clock;
+
+    /// <summary>The report's own words, without the elapsed time on the end.</summary>
+    private string? _agentSummary;
+
+    /// <summary>When the current turn began, and when the current state began.
+    /// Two marks because they answer different questions.</summary>
+    private DateTime _turnStart;
+    private DateTime _stateSince;
+
+    /// <summary>
+    /// Puts the elapsed time on the end of the status line, and keeps it moving.
+    ///
+    /// Which span is shown depends on what the agent is doing, because the
+    /// useful number is different in each case. While it works, the question is
+    /// how long the turn has been going. While it is blocked, the question is
+    /// how long it has been sitting there waiting for you. When it finishes,
+    /// the question is how long the whole thing took.
+    /// </summary>
+    private void RefreshAgentClock()
+    {
+        if (_agentSummary == null)
+        {
+            StopClock();
+            SetAgentStatus(null);
+            return;
+        }
+
+        string? elapsed = ElapsedLabel();
+        SetAgentStatus(elapsed == null ? _agentSummary : $"{_agentSummary} · {elapsed}");
+
+        // "Done" is a finished measurement, so it stops rather than counting
+        // on. A blocked agent keeps counting: the number growing is the point.
+        bool moving = _lastEvent is AgentEvent.Prompt or AgentEvent.Tool
+            or AgentEvent.Permission or AgentEvent.Idle or AgentEvent.Error;
+        if (moving)
+            StartClock();
+        else
+            StopClock();
+    }
+
+    private string? ElapsedLabel()
+    {
+        DateTime from = _lastEvent switch
+        {
+            // Measured from the prompt, through however many tools it took.
+            AgentEvent.Prompt or AgentEvent.Tool or AgentEvent.Done => _turnStart,
+
+            // Measured from the moment it stopped being able to continue.
+            AgentEvent.Permission or AgentEvent.Idle or AgentEvent.Error => _stateSince,
+
+            // "Ready" has nothing to measure yet.
+            _ => default,
+        };
+
+        // No prompt seen: Zharp can start in the middle of somebody else's
+        // turn. Falling back to this state's own start beats reporting the
+        // time since the epoch.
+        if (from == default)
+            from = _lastEvent is AgentEvent.Start ? default : _stateSince;
+        if (from == default)
+            return null;
+
+        return Format(DateTime.UtcNow - from);
+    }
+
+    /// <summary>
+    /// Short enough for a tab card, and stable in width as it counts: the
+    /// seconds are padded so the text does not shuffle every tick.
+    /// </summary>
+    private static string Format(TimeSpan span)
+    {
+        if (span < TimeSpan.Zero)
+            span = TimeSpan.Zero;
+        if (span.TotalMinutes < 1)
+            return $"{span.Seconds}s";
+        if (span.TotalHours < 1)
+            return $"{span.Minutes}m {span.Seconds:00}s";
+        return $"{(int)span.TotalHours}h {span.Minutes:00}m";
+    }
+
+    private void StartClock()
+    {
+        if (_clock == null)
+        {
+            if (_dispatcher == null)
+                return;
+            _clock = _dispatcher.CreateTimer();
+            _clock.Interval = TimeSpan.FromSeconds(1);
+            _clock.IsRepeating = true;
+            _clock.Tick += (_, _) => RefreshAgentClock();
+        }
+        if (!_clock.IsRunning)
+            _clock.Start();
+    }
+
+    private void StopClock() => _clock?.Stop();
+
+    /// <summary>Called when the tab closes: nothing left to count.</summary>
+    public void StopAgentClock() => StopClock();
 
     private static int IndexOfAgent(string name)
     {
@@ -390,6 +501,9 @@ public sealed class SessionItem : INotifyPropertyChanged
             // No agent: drop the live status entirely (including "Done").
             _agentWasBusy = false;
             _lastEvent = null;
+            _agentSummary = null;
+            _turnStart = default;
+            StopClock();
             SetAgentStatus(null);
         }
         Notify(nameof(StandardIconVisibility));

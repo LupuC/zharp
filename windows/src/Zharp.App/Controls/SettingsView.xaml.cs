@@ -206,38 +206,54 @@ public sealed partial class SettingsView : UserControl
 
     private void RefreshClaudeRow()
     {
-        if (!ClaudeCodeIntegration.IsClaudeCodePresent)
-        {
-            ClaudeStatusText.Text = "Not installed on this machine.";
-            ClaudeConnectButton.Content = "Connect";
-            ClaudeConnectButton.IsEnabled = false;
-            ClaudeHint.Text = "";
-            return;
-        }
-
-        bool connected = ClaudeCodeIntegration.IsConnected();
-        ClaudeConnectButton.IsEnabled = true;
-        ClaudeConnectButton.Content = connected ? "Disconnect" : "Connect";
-        ClaudeStatusText.Text = connected
-            ? "Reporting its own status to Zharp."
-            : "Status is being read off the screen.";
-
-        // Say plainly which file gets written. It is the user's config, they
-        // did not ask for it to be a surprise, and knowing where it is is how
-        // they undo this without us.
-        ClaudeHint.Text = connected
-            ? $"Hooks live in {ClaudeCodeIntegration.SettingsPath}. Disconnecting removes them and leaves the rest of the file alone."
-            : $"Adds lifecycle hooks to {ClaudeCodeIntegration.SettingsPath}, pointing at a script that ships with Zharp. Nothing else in that file is changed, and the hooks do nothing in other terminals.";
-    }
-
-    private void OnClaudeConnectClick(object sender, RoutedEventArgs e)
-    {
+        bool wasReady = _ready;
+        _ready = false; // setting IsOn below must not read as the user toggling
         try
         {
-            if (ClaudeCodeIntegration.IsConnected())
-                ClaudeCodeIntegration.Disconnect();
-            else
+            if (!ClaudeCodeIntegration.IsClaudeCodePresent)
+            {
+                ClaudeToggle.IsOn = false;
+                ClaudeToggle.IsEnabled = false;
+                ClaudeStatusText.Text = "Not installed on this machine.";
+                ClaudeHint.Text = "";
+                return;
+            }
+
+            ClaudeToggle.IsEnabled = true;
+            ClaudeToggle.IsOn = _settings.AgentIntegration;
+
+            bool connected = ClaudeCodeIntegration.IsConnected();
+            ClaudeStatusText.Text = _settings.AgentIntegration
+                ? connected
+                    ? "Reporting its own status to Zharp."
+                    : "Will be set up the next time Zharp starts."
+                : "Off. Status is being read off the screen.";
+
+            // Say plainly which file this writes to. It is the user's config
+            // and Zharp edits it without being asked, so the least it can do is
+            // be specific about where, and about how to undo it without us.
+            ClaudeHint.Text = _settings.AgentIntegration
+                ? $"Lifecycle hooks in {ClaudeCodeIntegration.SettingsPath} run a script that ships with Zharp. Nothing else in that file is touched, a copy of the original is kept beside it, and the hooks do nothing in other terminals."
+                : $"Zharp has taken its hooks back out of {ClaudeCodeIntegration.SettingsPath} and will leave them out.";
+        }
+        finally
+        {
+            _ready = wasReady;
+        }
+    }
+
+    private void OnClaudeToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        try
+        {
+            _settings.AgentIntegration = ClaudeToggle.IsOn;
+            Commit();
+
+            if (ClaudeToggle.IsOn)
                 ClaudeCodeIntegration.Connect();
+            else
+                ClaudeCodeIntegration.Disconnect();
 
             RefreshClaudeRow();
 

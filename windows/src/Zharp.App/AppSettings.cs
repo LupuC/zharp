@@ -66,6 +66,15 @@ public sealed class AppSettings
     public bool SidebarVisible { get; set; } = true;
 
     /// <summary>
+    /// When true, Zharp keeps the AI agent hooks installed so agents report
+    /// their own status. On by default: it is what makes a tab able to say the
+    /// agent is waiting for you, and an integration nobody switches on is one
+    /// nobody has. Turning it off removes the hooks and keeps them off.
+    /// </summary>
+    [JsonPropertyName("agentIntegration")]
+    public bool AgentIntegration { get; set; } = true;
+
+    /// <summary>
     /// When true, NO_COLOR is removed from the environment of shells Zharp
     /// spawns, so tools emit ANSI colors even if it is set system-wide.
     /// </summary>

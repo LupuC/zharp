@@ -100,6 +100,11 @@ public partial class App : Application
             Log("Notification registration failed: " + ex);
         }
 
+        // Off the launch path: this reads and may rewrite a file on disk, and
+        // nothing on screen is waiting for the answer. New sessions pick the
+        // hooks up whenever it lands.
+        Task.Run(() => ClaudeCodeIntegration.Sync(Settings.AgentIntegration));
+
         _window = new MainWindow();
         Main = _window;
         _window.Activate();
