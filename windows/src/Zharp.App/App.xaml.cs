@@ -113,10 +113,24 @@ public partial class App : Application
             Log("Notification registration failed: " + ex);
         }
 
-        // Off the launch path: this reads and may rewrite a file on disk, and
+        // Reports from agents that cannot write to a terminal arrive here.
+        // Started before any session exists, so nothing can be missed.
+        AgentSpool.Start();
+
+        // Off the launch path: these read and may rewrite files on disk, and
         // nothing on screen is waiting for the answer. New sessions pick the
         // hooks up whenever it lands.
-        Task.Run(() => ClaudeCodeIntegration.Sync(Settings.AgentIntegration));
+        Task.Run(() =>
+        {
+            ClaudeCodeIntegration.Sync(Settings.AgentIntegration);
+
+            // Codex will not run a hook it has not been told to trust, so a
+            // fresh install owes the user an explanation. Recorded rather than
+            // acted on here: the place to say it is a terminal, and there is
+            // not one yet.
+            if (CodexIntegration.Sync(Settings.AgentIntegration))
+                Settings.CodexNoticeFor = "";
+        });
 
         _window = new MainWindow();
         Main = _window;

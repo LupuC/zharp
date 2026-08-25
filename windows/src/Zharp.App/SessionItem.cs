@@ -205,7 +205,21 @@ public sealed class SessionItem : INotifyPropertyChanged
                 dispatcher.TryEnqueue(() => ApplyReport(report));
         };
         session.PromptReturned += () => dispatcher.TryEnqueue(AgentFinished);
+
+        // The other transport. Agents that cannot write to the terminal drop
+        // their reports in a directory instead, and the one addressed to this
+        // session is the one carrying its key. Same report, same handler from
+        // here on: the two differ only in how they travelled.
+        _spoolHandler = (key, report) =>
+        {
+            if (key == session.SessionKey)
+                dispatcher.TryEnqueue(() => ApplyReport(report));
+        };
+        AgentSpool.Reported += _spoolHandler;
     }
+
+    /// <summary>Held so it can be unhooked; the spool outlives any one tab.</summary>
+    private readonly Action<string, AgentReport>? _spoolHandler;
 
     /// <summary>
     /// The shell is back at its prompt, so nothing is running in the foreground
@@ -426,8 +440,16 @@ public sealed class SessionItem : INotifyPropertyChanged
 
     private void StopClock() => _clock?.Stop();
 
-    /// <summary>Called when the tab closes: nothing left to count.</summary>
-    public void StopAgentClock() => StopClock();
+    /// <summary>
+    /// The tab is closing. Stops the clock and lets go of the spool, which is
+    /// process wide and would otherwise hold every tab ever opened.
+    /// </summary>
+    public void StopAgentClock()
+    {
+        StopClock();
+        if (_spoolHandler != null)
+            AgentSpool.Reported -= _spoolHandler;
+    }
 
     private static int IndexOfAgent(string name)
     {

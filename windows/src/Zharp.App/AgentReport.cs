@@ -54,7 +54,8 @@ public sealed record AgentReport(
     AgentEvent Event,
     string Summary,
     string? Tool,
-    string? Path)
+    string? Path,
+    string? Session)
 {
     /// <summary>
     /// True while the agent cannot make progress without you. This is what
@@ -97,7 +98,11 @@ public sealed record AgentReport(
                 ev,
                 Clip(Text(root, "summary"), 120) ?? "",
                 Clip(Text(root, "tool"), 40),
-                Text(root, "path"));
+                Text(root, "path"),
+
+                // Only the spool needs this: a report that arrives down a pty
+                // is already addressed by having come out of that pty.
+                Clip(Text(root, "session"), 64));
         }
         catch (JsonException)
         {

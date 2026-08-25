@@ -17,9 +17,38 @@ permission prompt you have not seen. From the outside those look identical.
 Every modern agent CLI can answer that question directly, because they all
 expose lifecycle hooks. This protocol is the shape of that answer.
 
+## Two ways in
+
+The payload below is the same whichever way it travels. Only the transport
+differs, and which one an agent uses is decided by the agent, not by us.
+
+**Through the terminal.** The hook returns an escape sequence, the agent writes
+it to the pty, and Zharp reads it back out. Nothing is written to disk and
+nothing needs routing: whatever comes out of a pty belongs to that pty's tab.
+This is the better transport and it is used wherever it is available, which
+today means Claude Code.
+
+**Through a spool directory.** The hook writes its report into
+`%LOCALAPPDATA%\Zharp\agents` and Zharp picks it up. This is for agents with no
+way to return a terminal sequence, which is most of them: a hook process has no
+controlling terminal of its own, and on Windows there is not even a `/dev/tty`
+to borrow. Codex works this way.
+
+The spool has to answer a question the pty answers for free: which tab. It is
+not guessed from the working directory, which cannot separate two agents in one
+repository. Zharp puts a unique `ZHARP_SESSION` in the environment of every
+shell it starts, the hook inherits it, and the report carries it back.
+
+Each report is a separate file, written under a name the watcher ignores and
+then renamed into place. A rename within one directory is atomic, so a reader
+can never see half a report and there is no read offset to keep in step with a
+writer. Reports are deleted as they are read; anything found at startup is
+delivered rather than discarded, because it is a report that arrived while
+Zharp was not running.
+
 ## The wire format
 
-The agent's hook writes one OSC 777 notification per event:
+Over the terminal, the agent's hook writes one OSC 777 notification per event:
 
 ```
 ESC ] 777 ; notify ; zharp://agent ; <json> BEL
@@ -41,6 +70,7 @@ The JSON body:
 | `summary` | no | One line for the tab card, in the agent's own words. Clipped to 100 characters. |
 | `tool` | no | The tool being run, when there is one. |
 | `path` | no | Absolute path of a file the agent just **wrote**. |
+| `session` | spool only | The `ZHARP_SESSION` of the tab this belongs to. Meaningless over the terminal, where the pty already says. |
 
 Events:
 
@@ -154,9 +184,56 @@ the current script and rewrites the set when any of them does not.
 
 ### Codex
 
-Not yet. Codex uses the same event names behind a `features.hooks` flag, and
-has a `commandWindows` key for a Windows specific command, so the mapping
-should be close to identical.
+Implemented, through the spool. Verified against codex-cli 0.145.0.
+
+The events line up almost exactly with Claude Code's, but the transport does
+not exist: there is no `terminalSequence` field, and the documentation is
+explicit that a hook's stdout is JSON or model context and never reaches the
+terminal. Checking the shipped binary agrees, and it is also missing
+`PostToolBatch`. So Codex reports through the spool, and `PostToolUse` is
+unfiltered rather than limited to writes, because it is then the only thing
+that can say the agent is running again after a permission prompt was
+answered.
+
+That is affordable here because the hook is node rather than PowerShell.
+Codex ships as an npm package, so node is always present where Codex is, and
+it starts in roughly a third of the time: ~48ms against ~139ms measured.
+
+| Zharp event | Codex hook | Matcher |
+|---|---|---|
+| `start` | `SessionStart` | |
+| `prompt` | `UserPromptSubmit` | |
+| `tool` | `PostToolUse` | |
+| `permission` | `PermissionRequest` | |
+| `done` | `Stop` | |
+| `end` | `SessionEnd` | |
+
+Codex has no equivalent of Claude's `idle_prompt` notification or of
+`StopFailure`, so there is no `idle` or `error` report from it.
+
+Three things are specific to Codex and worth knowing.
+
+**Hooks must be trusted before they run.** Codex asks on next start ("N hooks
+need review before they can run"), and until that is answered a Codex tab
+reports nothing. Zharp does not try to route around this, which would be
+defeating a safety feature that exists for precisely the case of a program
+writing hooks into your agent. Instead the first session after the hooks are
+installed opens with a line saying the prompt is coming, so a quiet tab is not
+mistaken for a broken one.
+
+**`notify` is not usable.** It holds a single program and OpenAI's own tooling
+already claims it on many machines, so taking it would break whatever was
+there. Hooks are the only way in.
+
+**Config goes to `~/.codex/hooks.json`, not `config.toml`.** Both are read and
+the JSON one takes precedence. `config.toml` is full of the user's own project
+trust settings, and rewriting TOML round trips badly; the JSON file is usually
+ours alone.
+
+Editing is done through `apply_patch`, whose input is a patch rather than a
+filename, so the file the changes panel follows is read out of the
+`*** Update File:` line in the patch body and resolved against the session's
+working directory.
 
 ### Gemini CLI
 

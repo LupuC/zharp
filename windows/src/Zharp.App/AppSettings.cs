@@ -84,6 +84,17 @@ public sealed class AppSettings
     public bool AgentIntegration { get; set; } = true;
 
     /// <summary>
+    /// The Codex hook script Zharp has already announced. Codex will not run a
+    /// hook it has not been told to trust, so the first session after they are
+    /// installed says so; without that, a Codex tab that reports nothing looks
+    /// broken rather than unapproved. Holding the path rather than a flag means
+    /// an update, which moves the script and needs approving again, says so
+    /// again on its own.
+    /// </summary>
+    [JsonPropertyName("codexNoticeFor")]
+    public string CodexNoticeFor { get; set; } = "";
+
+    /// <summary>
     /// When true, NO_COLOR is removed from the environment of shells Zharp
     /// spawns, so tools emit ANSI colors even if it is set system-wide.
     /// </summary>

@@ -21,6 +21,16 @@ public sealed class TerminalSession : IDisposable
     public TerminalEmulator Emulator { get; }
     public string Title { get; private set; }
 
+    /// <summary>
+    /// Identifies this session to anything running inside it.
+    ///
+    /// Zharp puts it in the shell's environment, so an agent's hook inherits it
+    /// and can name the tab it belongs to when it has no other way to say.
+    /// That is what lets two agents in the same repository report separately,
+    /// which matching on the working directory cannot do.
+    /// </summary>
+    public string SessionKey { get; } = Guid.NewGuid().ToString("N");
+
     /// <summary>Shell-reported current directory; falls back to the start directory.</summary>
     public string? WorkingDirectory { get; private set; }
     public bool IsStarted => _pty != null;
@@ -90,6 +100,12 @@ public sealed class TerminalSession : IDisposable
             // same hook can be installed once and cost nothing in any other
             // terminal. Bump it only for a change old Zharps cannot read.
             ["ZHARP_AGENT_PROTOCOL"] = "1",
+
+            // Which tab this shell is. Only agents that report through the
+            // spool need it, but every session gets one: which agent somebody
+            // runs is not knowable when the shell starts.
+            ["ZHARP_SESSION"] = SessionKey,
+            ["ZHARP_SPOOL"] = AgentSpool.Directory,
 
             // Strip session markers Zharp may have inherited from its own parent
             // (e.g. when launched from inside a Claude Code session). Leaking them

@@ -363,6 +363,8 @@ public sealed partial class MainWindow : Window
             OverrideNoColor = _settings.OverrideNoColor,
             ExtraEnvironment = shell.ExtraEnvironment,
         };
+        ShowCodexTrustNotice(session);
+
         var view = new TerminalView(session, _settings.FontSize, _settings.FontFamily)
         {
             DefaultCursorStyleCode = AppSettings.CursorStyleToCode(_settings.CursorStyle),
@@ -402,6 +404,37 @@ public sealed partial class MainWindow : Window
         _sessions.Add(item);
         RefreshVisibleSessions();
         ActivateSession(item);
+    }
+
+    /// <summary>
+    /// Explains, once, that Codex is about to ask whether to trust the hooks
+    /// Zharp just wrote.
+    ///
+    /// Codex will not run a hook it has not been told to trust, and that is a
+    /// good rule, exactly because a program writing hooks into your agent is
+    /// the case it guards. Zharp does not try to route around it. But a Codex
+    /// tab that reports nothing looks broken rather than unapproved, so the
+    /// user is told what to expect.
+    ///
+    /// Written into the emulator before the shell starts, while the screen is
+    /// still empty. Feeding it later would land in the middle of a prompt line
+    /// and corrupt it.
+    /// </summary>
+    private void ShowCodexTrustNotice(TerminalSession session)
+    {
+        if (!_settings.AgentIntegration)
+            return;
+        if (_settings.CodexNoticeFor == CodexIntegration.ScriptPath)
+            return;
+        if (!CodexIntegration.IsConnected())
+            return;
+
+        session.Emulator.Feed(System.Text.Encoding.UTF8.GetBytes(
+            "\x1b[2mZharp installed status hooks for Codex. "
+            + "Codex will ask you to trust them the next time it starts.\x1b[0m\r\n"));
+
+        _settings.CodexNoticeFor = CodexIntegration.ScriptPath;
+        _settings.Save();
     }
 
     /// <summary>Whichever window is currently holding this tab.</summary>
