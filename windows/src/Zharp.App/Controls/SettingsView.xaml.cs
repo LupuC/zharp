@@ -24,7 +24,8 @@ public sealed partial class SettingsView : UserControl
         _settings = settings;
         InitializeComponent();
 
-        _pages = [AppearancePage, TerminalPage, ShellPage, ShortcutsPage, AboutPage];
+        // About stays last: ShowAbout() selects by the end of this list.
+        _pages = [AppearancePage, TerminalPage, ShellPage, AgentsPage, ShortcutsPage, AboutPage];
         LoadValues();
         NavRail.SelectedIndex = 0;
     }
@@ -50,6 +51,7 @@ public sealed partial class SettingsView : UserControl
         ShowPathToggle.IsOn = _settings.SidebarShowPath;
         ShowSearchToggle.IsOn = _settings.SidebarShowSearch;
         BuildShortcutRows();
+        RefreshClaudeRow();
 
         var familyNames = CanvasTextFormat.GetSystemFontFamilies()
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
@@ -192,6 +194,63 @@ public sealed partial class SettingsView : UserControl
         int index = NavRail.SelectedIndex;
         for (int i = 0; i < _pages.Length; i++)
             _pages[i].Visibility = i == index ? Visibility.Visible : Visibility.Collapsed;
+
+        // Claude Code's settings file is edited by hand and by Claude Code
+        // itself. Re-reading it on the way in beats showing what was true when
+        // this page was last built.
+        if (ReferenceEquals(_pages[index], AgentsPage))
+            RefreshClaudeRow();
+    }
+
+    // ---------------------------------------------------------------- AI agents
+
+    private void RefreshClaudeRow()
+    {
+        if (!ClaudeCodeIntegration.IsClaudeCodePresent)
+        {
+            ClaudeStatusText.Text = "Not installed on this machine.";
+            ClaudeConnectButton.Content = "Connect";
+            ClaudeConnectButton.IsEnabled = false;
+            ClaudeHint.Text = "";
+            return;
+        }
+
+        bool connected = ClaudeCodeIntegration.IsConnected();
+        ClaudeConnectButton.IsEnabled = true;
+        ClaudeConnectButton.Content = connected ? "Disconnect" : "Connect";
+        ClaudeStatusText.Text = connected
+            ? "Reporting its own status to Zharp."
+            : "Status is being read off the screen.";
+
+        // Say plainly which file gets written. It is the user's config, they
+        // did not ask for it to be a surprise, and knowing where it is is how
+        // they undo this without us.
+        ClaudeHint.Text = connected
+            ? $"Hooks live in {ClaudeCodeIntegration.SettingsPath}. Disconnecting removes them and leaves the rest of the file alone."
+            : $"Adds lifecycle hooks to {ClaudeCodeIntegration.SettingsPath}, pointing at a script that ships with Zharp. Nothing else in that file is changed, and the hooks do nothing in other terminals.";
+    }
+
+    private void OnClaudeConnectClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (ClaudeCodeIntegration.IsConnected())
+                ClaudeCodeIntegration.Disconnect();
+            else
+                ClaudeCodeIntegration.Connect();
+
+            RefreshClaudeRow();
+
+            // Hooks are read when a session starts, so nothing already running
+            // changes. Better to say so than to let them wonder why.
+            ClaudeHint.Text += " Open a new Claude Code session for this to take effect.";
+        }
+        catch (Exception ex)
+        {
+            App.Log($"claude code: {ex.Message}");
+            ClaudeStatusText.Text = "Could not update the Claude Code settings.";
+            ClaudeHint.Text = ex.Message;
+        }
     }
 
     // ---------------------------------------------------------------- handlers

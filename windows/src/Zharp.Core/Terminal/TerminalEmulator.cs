@@ -437,7 +437,40 @@ public sealed class TerminalEmulator : IVtHandler
                 else if (arg.StartsWith("B", StringComparison.OrdinalIgnoreCase))
                     RecordPromptEnd();
                 break;
+            case 777:
+                // OSC 777;notify;<title>;<body> - the rxvt-unicode notification
+                // convention, which the AI coding agents have settled on for
+                // talking to their terminal. Only our own title is claimed;
+                // another program's notification is its business, not ours.
+                HandleNotify(arg);
+                break;
         }
+    }
+
+    /// <summary>The OSC 777 title an agent uses to address Zharp specifically.</summary>
+    private const string AgentNotifyTitle = "zharp://agent";
+
+    /// <summary>
+    /// An AI agent reporting its own state, as the raw JSON body of the
+    /// notification. Zharp used to work this out by reading the screen, which
+    /// could see that an agent was busy but never that it was waiting on you.
+    /// </summary>
+    public event Action<string>? AgentReported;
+
+    private void HandleNotify(string arg)
+    {
+        const string Verb = "notify;";
+        if (!arg.StartsWith(Verb, StringComparison.Ordinal))
+            return;
+
+        string rest = arg[Verb.Length..];
+        int sep = rest.IndexOf(';');
+        if (sep < 0)
+            return;
+        if (!rest.AsSpan(0, sep).Equals(AgentNotifyTitle, StringComparison.Ordinal))
+            return;
+
+        AgentReported?.Invoke(rest[(sep + 1)..]);
     }
 
     private void SetWorkingDirectory(string? path)

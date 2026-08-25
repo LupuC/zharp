@@ -30,6 +30,10 @@
                     <!-- Brand mark, cream variant on dark surfaces. -->
                     <BitmapImage x:Key="ZharpLogoImage" UriSource="ms-appx:///Assets/logo-cream.png" />
                     <SolidColorBrush x:Key="ZharpBrandForeground" Color="#F0EFEC" />
+                    <!-- An agent on this tab is waiting for you. Amber rather
+                         than red: it is a request, not a failure. -->
+                    <SolidColorBrush x:Key="AgentAttentionBrush" Color="#F0B429" />
+                    <SolidColorBrush x:Key="AgentAttentionRingBrush" Color="#FF282828" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Light">
                     <SolidColorBrush x:Key="ChromeWashBrush" Color="#F0EDE6D8" />
@@ -46,6 +50,8 @@
                     <!-- Brand mark, ink variant on light surfaces. -->
                     <BitmapImage x:Key="ZharpLogoImage" UriSource="ms-appx:///Assets/logo-ink.png" />
                     <SolidColorBrush x:Key="ZharpBrandForeground" Color="#1A1A19" />
+                    <SolidColorBrush x:Key="AgentAttentionBrush" Color="#C77700" />
+                    <SolidColorBrush x:Key="AgentAttentionRingBrush" Color="#FFEDE6D8" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 

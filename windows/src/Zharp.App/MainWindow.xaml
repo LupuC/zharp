@@ -83,17 +83,27 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <Border Width="{Binding Z24}" Height="{Binding Z24}" CornerRadius="5" Background="{ThemeResource IconChipBrush}"
-                            VerticalAlignment="Center">
-                        <Grid>
-                            <FontIcon Style="{StaticResource TablerIcon}" Glyph="{Binding IconGlyph}"
-                                      FontSize="{Binding Z16}" Foreground="{ThemeResource BarIconBrush}"
-                                      Visibility="{Binding StandardIconVisibility}" />
-                            <FontIcon Style="{StaticResource TablerIcon}" Glyph="{Binding AgentGlyph}"
-                                      FontSize="{Binding Z16}" Foreground="{Binding AgentBrush}"
-                                      Visibility="{Binding ClaudeIconVisibility}" />
-                        </Grid>
-                    </Border>
+                    <!-- The dot sits outside the chip, not in it: a rounded
+                         Border clips its children, and a badge is only a badge
+                         when it breaks the edge of the thing it is on. -->
+                    <Grid VerticalAlignment="Center">
+                        <Border Width="{Binding Z24}" Height="{Binding Z24}" CornerRadius="5"
+                                Background="{ThemeResource IconChipBrush}">
+                            <Grid>
+                                <FontIcon Style="{StaticResource TablerIcon}" Glyph="{Binding IconGlyph}"
+                                          FontSize="{Binding Z16}" Foreground="{ThemeResource BarIconBrush}"
+                                          Visibility="{Binding StandardIconVisibility}" />
+                                <FontIcon Style="{StaticResource TablerIcon}" Glyph="{Binding AgentGlyph}"
+                                          FontSize="{Binding Z16}" Foreground="{Binding AgentBrush}"
+                                          Visibility="{Binding ClaudeIconVisibility}" />
+                            </Grid>
+                        </Border>
+                        <Ellipse Width="8" Height="8" Margin="0,-2,-2,0"
+                                 HorizontalAlignment="Right" VerticalAlignment="Top"
+                                 Fill="{ThemeResource AgentAttentionBrush}"
+                                 Stroke="{ThemeResource AgentAttentionRingBrush}" StrokeThickness="1.5"
+                                 Visibility="{Binding AttentionVisibility}" />
+                    </Grid>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
                         <controls:TailTextBlock Text="{Binding DisplayTitle}" FontSize="{Binding Z12}"
                                                 EmphasisBold="True" TailFirst="{Binding TitleTailFirst}" />
@@ -146,6 +156,11 @@
                         <FontIcon Style="{StaticResource TablerIcon}" Glyph="{Binding AgentGlyph}"
                                   FontSize="14" Foreground="{Binding AgentBrush}"
                                   Visibility="{Binding ClaudeIconVisibility}" />
+                        <Ellipse Width="7" Height="7" Margin="0,-2,-4,0"
+                                 HorizontalAlignment="Right" VerticalAlignment="Top"
+                                 Fill="{ThemeResource AgentAttentionBrush}"
+                                 Stroke="{ThemeResource AgentAttentionRingBrush}" StrokeThickness="1.5"
+                                 Visibility="{Binding AttentionVisibility}" />
                     </Grid>
                     <controls:TailTextBlock Grid.Column="1" Text="{Binding DisplayTitle}" FontSize="{Binding Z12}"
                                             TailFirst="{Binding TitleTailFirst}"
@@ -194,6 +209,11 @@
                         <FontIcon Style="{StaticResource TablerIcon}" Glyph="{Binding AgentGlyph}" FontSize="15"
                                   Foreground="{Binding AgentBrush}"
                                   Visibility="{Binding ClaudeIconVisibility}" />
+                        <Ellipse Width="7" Height="7" Margin="0,-2,-4,0"
+                                 HorizontalAlignment="Right" VerticalAlignment="Top"
+                                 Fill="{ThemeResource AgentAttentionBrush}"
+                                 Stroke="{ThemeResource AgentAttentionRingBrush}" StrokeThickness="1.5"
+                                 Visibility="{Binding AttentionVisibility}" />
                     </Grid>
                     <TextBlock Grid.Column="1" Text="{Binding CompactTitle}" FontSize="{Binding Z12}"
                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis"

@@ -137,6 +137,86 @@ public sealed partial class DiffView : UserControl
         Unloaded += (_, _) => _poll.Stop();
     }
 
+    /// <summary>
+    /// The file an agent just wrote, waiting to be selected once the list has
+    /// caught up with it. Repo-relative, forward slashes, like git's own paths.
+    /// </summary>
+    private string? _following;
+
+    /// <summary>
+    /// How many more refreshes may go looking for it. git can take a moment to
+    /// see a write, but a file that never turns up (ignored, or written outside
+    /// the tree) must not sit there hijacking the selection forever.
+    /// </summary>
+    private int _followTries;
+
+    /// <summary>
+    /// Opens the file an AI agent has just written.
+    ///
+    /// The panel already re-reads the working tree every two seconds, so the
+    /// change would appear on its own. What this adds is which file to be
+    /// looking at: the agent is the only one who knows that, and being told
+    /// turns the panel from a thing you check into a thing you watch.
+    /// </summary>
+    public async Task FollowAsync(string absolutePath)
+    {
+        if (_repoRoot is not { Length: > 0 } repo)
+            return;
+
+        string full;
+        try
+        {
+            full = System.IO.Path.GetFullPath(absolutePath);
+        }
+        catch (Exception)
+        {
+            return; // not a path we can make sense of
+        }
+
+        string root = System.IO.Path.GetFullPath(repo)
+            .TrimEnd(System.IO.Path.DirectorySeparatorChar);
+        if (!full.StartsWith(root + System.IO.Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase))
+            return; // the agent is editing outside the repository on screen
+
+        _following = full[(root.Length + 1)..].Replace('\\', '/');
+        _followTries = 3;
+
+        // Quiet, because the file set usually has not changed: the agent edits
+        // the same handful of files over and over, and a loud refresh would
+        // rebuild the list under the user on every save.
+        await RefreshAsync(quiet: true);
+    }
+
+    /// <summary>
+    /// Selects the followed file once it is actually in the list.
+    ///
+    /// Separate from the rebuild because most of the time there is no rebuild:
+    /// editing a file that was already changed leaves the file set identical,
+    /// and the selection still has to move.
+    /// </summary>
+    private void SelectFollowed()
+    {
+        if (_following is not { Length: > 0 } want)
+            return;
+
+        int index = _rows.FindIndex(r =>
+            string.Equals(r.Path, want, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+        {
+            // git has not noticed the write yet, so let the next poll look.
+            // Give up eventually: some writes never become a change at all.
+            if (--_followTries <= 0)
+                _following = null;
+            return;
+        }
+
+        _following = null;
+        if (FileList.SelectedIndex != index)
+            FileList.SelectedIndex = index;
+        FileList.ScrollIntoView(_rows[index]);
+    }
+
     /// <summary>Points the view at the directory the active session is in.</summary>
     public async Task SetWorkingDirectoryAsync(string? cwd)
     {
@@ -144,6 +224,11 @@ public sealed partial class DiffView : UserControl
             return;
         RememberPlace();
         _pendingCwd = cwd;
+
+        // A pending follow belongs to the session being left. Carrying it into
+        // the next one would open a file the user never asked about.
+        _following = null;
+
         await RefreshAsync();
     }
 
@@ -169,6 +254,7 @@ public sealed partial class DiffView : UserControl
 
             if (_repoRoot == null)
             {
+                _following = null;
                 SetTotals(0, 0);
                 ShowEmpty("Not a git repository",
                     "Open a session inside one and this fills in.");
@@ -239,9 +325,12 @@ public sealed partial class DiffView : UserControl
 
                 FileList.ItemsSource = _rows;
 
-                // Prefer the file this session was reading, then the file
-                // this repository was last left on, then the first.
-                string? want = selectedPath;
+                // Prefer the file an agent has just written, then the file this
+                // session was reading, then the file this repository was last
+                // left on, then the first. The agent's file goes first because
+                // it is the most recent statement of what matters, and picking
+                // it here rather than afterwards avoids selecting twice.
+                string? want = _following ?? selectedPath;
                 if (want == null && _repoRoot != null
                     && _placeInRepo.TryGetValue(_repoRoot, out var place))
                     want = place.Path;
@@ -268,6 +357,11 @@ public sealed partial class DiffView : UserControl
                     changes[i].Removed = _rows[i].Change.Removed;
                 }
             }
+
+            // After the list is settled, whether it was rebuilt or not: an edit
+            // to a file already in the list changes nothing about the set, and
+            // the selection still has to move to it.
+            SelectFollowed();
 
             _ = FillCountsAsync(ct, quiet);
         }

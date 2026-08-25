@@ -71,6 +71,12 @@
                 </ListViewItem>
                 <ListViewItem>
                     <StackPanel Orientation="Horizontal" Spacing="10" Padding="8,8">
+                        <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEFD5;" FontSize="19" Foreground="{ThemeResource BarIconBrush}" />
+                        <TextBlock Text="AI agents" FontSize="12.5" VerticalAlignment="Center" />
+                    </StackPanel>
+                </ListViewItem>
+                <ListViewItem>
+                    <StackPanel Orientation="Horizontal" Spacing="10" Padding="8,8">
                         <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEBD6;" FontSize="19" Foreground="{ThemeResource BarIconBrush}" />
                         <TextBlock Text="Shortcuts" FontSize="12.5" VerticalAlignment="Center" />
                     </StackPanel>
@@ -475,6 +481,36 @@
                                       OnContent="" OffContent="" Margin="0,-4,-32,-8"
                                       VerticalAlignment="Center" Toggled="OnNoColorToggled" />
                     </Grid>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                </StackPanel>
+
+                <!-- ============ AI agents ============ -->
+                <StackPanel x:Name="AgentsPage" MaxWidth="720" Visibility="Collapsed">
+                    <TextBlock Text="Agent status" Style="{StaticResource FirstSectionHeader}" />
+                    <TextBlock Text="Connected agents report what they are doing, so a tab can show the file being edited and say when the agent is waiting for you. Zharp otherwise reads this off the screen, which cannot tell finished from blocked."
+                               Style="{StaticResource SettingDescription}" Margin="0,0,0,6" />
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Claude Code" Style="{StaticResource SettingTitle}" />
+                            <TextBlock x:Name="ClaudeStatusText" Style="{StaticResource SettingDescription}" />
+                        </StackPanel>
+                        <Button x:Name="ClaudeConnectButton" Grid.Column="1" FontSize="13"
+                                VerticalAlignment="Center" Click="OnClaudeConnectClick" />
+                    </Grid>
+
+                    <TextBlock x:Name="ClaudeHint" Style="{StaticResource SettingDescription}"
+                               Margin="0,2,0,0" TextWrapping="Wrap" />
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
+                    <TextBlock Text="Other agents" Style="{StaticResource SectionHeader}" />
+                    <TextBlock Text="Codex, Gemini CLI, OpenCode and Aider are recognized on the tab card by name. Reporting for those is not wired up yet, so their status is still read from the screen."
+                               Style="{StaticResource SettingDescription}" />
 
                     <Rectangle Style="{StaticResource SectionDivider}" />
                 </StackPanel>

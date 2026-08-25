@@ -39,6 +39,10 @@ public sealed class TerminalSession : IDisposable
     public event Action<int>? Exited;
     public event Action? Bell;
 
+    /// <summary>An AI agent running in this session reporting its own state.
+    /// Raised on the pty thread with the raw JSON body.</summary>
+    public event Action<string>? AgentReported;
+
     public TerminalSession(string commandLine, string? workingDirectory, string initialTitle,
         int scrollbackLines = 10000)
     {
@@ -60,6 +64,7 @@ public sealed class TerminalSession : IDisposable
         Emulator.ResponseRequested += WriteRaw;
         Emulator.CommandExecuted += cmd => CommandExecuted?.Invoke(cmd);
         Emulator.BellRang += () => Bell?.Invoke();
+        Emulator.AgentReported += payload => AgentReported?.Invoke(payload);
     }
 
     public void EnsureStarted(int cols, int rows)
@@ -72,8 +77,14 @@ public sealed class TerminalSession : IDisposable
         var env = new Dictionary<string, string?>
         {
             ["TERM_PROGRAM"] = "Zharp",
-            ["TERM_PROGRAM_VERSION"] = "0.1.0",
+            ["TERM_PROGRAM_VERSION"] = UpdateService.CurrentVersion.ToString(),
             ["COLORTERM"] = "truecolor",
+
+            // The version of the agent-report protocol this build understands.
+            // Agent hooks check for it and stay silent when it is absent, so the
+            // same hook can be installed once and cost nothing in any other
+            // terminal. Bump it only for a change old Zharps cannot read.
+            ["ZHARP_AGENT_PROTOCOL"] = "1",
 
             // Strip session markers Zharp may have inherited from its own parent
             // (e.g. when launched from inside a Claude Code session). Leaking them

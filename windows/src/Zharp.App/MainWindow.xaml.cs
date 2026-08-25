@@ -385,12 +385,129 @@ public sealed partial class MainWindow : Window
 
         session.CommandExecuted += cmd =>
             HistoryStore.Instance.Add(cmd, session.WorkingDirectory, shell.DisplayName);
+
+        // Both of these resolve the owning window when they fire rather than
+        // closing over this one. A tab can be dragged into another window with
+        // its shell still running, and the badge, the taskbar and the changes
+        // panel all belong to whichever window is holding it at the time.
+        item.AttentionChanged += owner =>
+            OwnerOf(owner)?.OnSessionAttentionChanged(owner);
+
+        // The agent says which file it just wrote; the panel is what shows it.
+        item.AgentTouchedFile += (owner, path) =>
+            OwnerOf(owner)?.FollowAgentEdit(owner, path);
+
         HookSessionToWindow(item);
 
         _sessions.Add(item);
         RefreshVisibleSessions();
         ActivateSession(item);
     }
+
+    /// <summary>Whichever window is currently holding this tab.</summary>
+    private static MainWindow? OwnerOf(SessionItem item) =>
+        App.Windows.FirstOrDefault(w => w._sessions.Contains(item));
+
+    /// <summary>
+    /// Opens the file the agent just wrote, when this tab is the one on screen
+    /// and its changes panel is open. Following a file in a tab you cannot see
+    /// would move the panel out from under whatever you are actually reading.
+    /// </summary>
+    private void FollowAgentEdit(SessionItem item, string path)
+    {
+        if (!ReferenceEquals(_active, item) || _diffView == null)
+            return;
+        if (DiffPanel.Visibility != Visibility.Visible)
+            return;
+        _ = _diffView.FollowAsync(path);
+    }
+
+    /// <summary>
+    /// An agent in one of this window's tabs has become blocked on the user.
+    ///
+    /// The tab card carries a badge for itself. This is about the case the
+    /// badge cannot cover: the tab is not the one on screen, or Zharp is not
+    /// the window you are looking at. Then it is worth saying so out loud,
+    /// because the whole point of running several agents is not watching them.
+    /// </summary>
+    private void OnSessionAttentionChanged(SessionItem item)
+    {
+        if (!item.NeedsAttention)
+            return;
+
+        // Already in front of them. The status line says the rest.
+        bool visible = ReferenceEquals(_active, item) && IsForeground();
+        if (visible)
+        {
+            item.MarkSeen();
+            return;
+        }
+
+        FlashTaskbar();
+
+        try
+        {
+            var toast = new Microsoft.Windows.AppNotifications.Builder.AppNotificationBuilder()
+                .AddText($"{item.SessionName} needs you")
+                .AddText($"{item.Subtitle} - {item.DisplaySubtitle}")
+                .BuildNotification();
+            Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(toast);
+        }
+        catch (Exception ex)
+        {
+            // A toast is a courtesy. The badge and the taskbar already said it.
+            App.Log($"agent toast: {ex.Message}");
+        }
+    }
+
+    private bool IsForeground() =>
+        GetForegroundWindow() == WinRT.Interop.WindowNative.GetWindowHandle(this);
+
+    /// <summary>
+    /// The conventional Windows "over here" - the taskbar button flashes until
+    /// the window is brought forward, and stays highlighted after it stops.
+    /// Deliberately not a window that steals focus: the user is in the middle
+    /// of something, and an agent waiting is not an emergency.
+    /// </summary>
+    private void FlashTaskbar()
+    {
+        try
+        {
+            var info = new FLASHWINFO
+            {
+                cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<FLASHWINFO>(),
+                hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this),
+                dwFlags = FLASHW_TRAY | FLASHW_TIMERNOFG,
+                uCount = 3,
+                dwTimeout = 0,
+            };
+            FlashWindowEx(ref info);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"agent flash: {ex.Message}");
+        }
+    }
+
+    private const uint FLASHW_TRAY = 0x00000002;
+    private const uint FLASHW_TIMERNOFG = 0x0000000C;
+
+    [System.Runtime.InteropServices.StructLayout(
+        System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct FLASHWINFO
+    {
+        public uint cbSize;
+        public IntPtr hwnd;
+        public uint dwFlags;
+        public uint uCount;
+        public uint dwTimeout;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
 
     /// <summary>Points the session's window-scoped wiring at THIS window. A tab
     /// carries its shell between windows, so the handler that closes the tab on
@@ -592,6 +709,10 @@ public sealed partial class MainWindow : Window
     private void ActivateSession(SessionItem item)
     {
         _active = item;
+
+        // Looking at the tab is what clears its badge. Whatever the agent
+        // wants is now on screen in front of you.
+        item.MarkSeen();
 
         // Every transition is focus-first, remove-after: if the focused element
         // leaves the tree first, XAML bounces focus to the first tab stop (the

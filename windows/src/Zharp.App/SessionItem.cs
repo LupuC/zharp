@@ -179,7 +179,11 @@ public sealed class SessionItem : INotifyPropertyChanged
             // Live agent status ("✳ Infusing… (10s · ↓ 452 tokens)"): scrape
             // the visible screen for the spinner row, throttled, only while
             // an agent is active. Runs on the pty thread; UI via dispatcher.
-            if (_agent < 0)
+            //
+            // Only until the agent introduces itself. Once one is reporting its
+            // own state there is nothing here worth reading: the screen can say
+            // that it is busy, and never that it is waiting on you.
+            if (_agent < 0 || _reports)
                 return;
             long now = Environment.TickCount64;
             if (now - _lastStatusScrape < 250)
@@ -188,15 +192,125 @@ public sealed class SessionItem : INotifyPropertyChanged
             string? status = ScrapeAgentStatus(session.Emulator);
             dispatcher.TryEnqueue(() => ApplyAgentStatus(status));
         };
+        session.AgentReported += payload =>
+        {
+            if (AgentReport.Parse(payload) is { } report)
+                dispatcher.TryEnqueue(() => ApplyReport(report));
+        };
+    }
+
+    /// <summary>
+    /// True once this session's agent has reported its own state at least once.
+    /// From then on the screen scrape is off for good, including across the
+    /// quiet stretches between turns: falling back mid-session would let the
+    /// two disagree, and the guess would win whenever it spoke last.
+    /// </summary>
+    private bool _reports;
+
+    /// <summary>Raised when this session starts or stops needing you.</summary>
+    public event Action<SessionItem>? AttentionChanged;
+
+    private bool _needsAttention;
+
+    /// <summary>
+    /// Whether the agent here is blocked on you rather than working. The one
+    /// state worth showing on a tab you are not looking at.
+    /// </summary>
+    public bool NeedsAttention
+    {
+        get => _needsAttention;
+        private set
+        {
+            if (_needsAttention == value)
+                return;
+            _needsAttention = value;
+            Notify(nameof(NeedsAttention));
+            Notify(nameof(AttentionVisibility));
+            Notify(nameof(SubtitleTint));
+            AttentionChanged?.Invoke(this);
+        }
+    }
+
+    public Visibility AttentionVisibility =>
+        _needsAttention ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>
+    /// You are looking at this tab, so it has stopped being news. The status
+    /// line still says what the agent wants; only the badge goes, because a
+    /// badge on the tab you are already reading is just decoration.
+    /// </summary>
+    public void MarkSeen() => NeedsAttention = false;
+
+    /// <summary>The file the agent last wrote, for whoever wants to follow along.</summary>
+    public event Action<SessionItem, string>? AgentTouchedFile;
+
+    private void ApplyReport(AgentReport report)
+    {
+        _reports = true;
+        _lastEvent = report.Event;
+
+        if (report.Event == AgentEvent.End)
+        {
+            // The agent is gone. The badge, the status line and any standing
+            // request for attention go with it.
+            NeedsAttention = false;
+            if (SetAgent(-1))
+                NotifyDisplayChanged();
+            return;
+        }
+
+        // The report names its own agent, so a tab launched in some way the
+        // command sniffing cannot read still gets the right logo: through a
+        // wrapper script, resumed by the shell's history, started by a task
+        // runner. Being told beats inferring.
+        //
+        // An agent we carry no logo for keeps whatever badge it already had.
+        // Clearing it would punish a new agent for being new, and its status
+        // line still works either way.
+        int agent = IndexOfAgent(report.Agent);
+        if (agent >= 0 && SetAgent(agent))
+            NotifyDisplayChanged();
+
+        NeedsAttention = report.NeedsAttention;
+        SetAgentStatus(report.Summary.Length > 0 ? report.Summary : null);
+
+        if (report.Path is { Length: > 0 } path)
+            AgentTouchedFile?.Invoke(this, path);
+    }
+
+    private static int IndexOfAgent(string name)
+    {
+        for (int i = 0; i < KnownAgents.Length; i++)
+        {
+            if (string.Equals(name, KnownAgents[i].Match, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+        return -1;
     }
 
     private long _lastStatusScrape;
     private bool _agentWasBusy;
+    private AgentEvent? _lastEvent;
 
-    /// <summary>Green tint for the "Done" state; transparent = theme color.</summary>
-    public Color SubtitleTint => _agentStatus == DoneStatus
-        ? Color.FromArgb(0xFF, 0x3F, 0xB9, 0x50)
-        : Color.FromArgb(0x00, 0x00, 0x00, 0x00);
+    private static readonly Color DoneGreen = Color.FromArgb(0xFF, 0x3F, 0xB9, 0x50);
+    private static readonly Color WaitingAmber = Color.FromArgb(0xFF, 0xE0, 0x9B, 0x28);
+    private static readonly Color NoTint = Color.FromArgb(0x00, 0x00, 0x00, 0x00);
+
+    /// <summary>
+    /// Status line color: amber while the agent is waiting on you, green when
+    /// it has finished, otherwise the theme's own. Transparent means untinted.
+    /// </summary>
+    public Color SubtitleTint
+    {
+        get
+        {
+            if (_needsAttention)
+                return WaitingAmber;
+            if (_lastEvent == AgentEvent.Done || _agentStatus == DoneStatus)
+                return DoneGreen;
+            return NoTint;
+        }
+    }
 
     private void ApplyAgentStatus(string? spinner)
     {
@@ -275,6 +389,7 @@ public sealed class SessionItem : INotifyPropertyChanged
         {
             // No agent: drop the live status entirely (including "Done").
             _agentWasBusy = false;
+            _lastEvent = null;
             SetAgentStatus(null);
         }
         Notify(nameof(StandardIconVisibility));
