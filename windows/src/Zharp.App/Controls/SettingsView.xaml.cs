@@ -51,6 +51,7 @@ public sealed partial class SettingsView : UserControl
         ShowPathToggle.IsOn = _settings.SidebarShowPath;
         ShowSearchToggle.IsOn = _settings.SidebarShowSearch;
         AgentAlertToggle.IsOn = _settings.AgentNotifications;
+        RemoteGitToggle.IsOn = _settings.RemoteGit;
         BuildShortcutRows();
 
         var familyNames = CanvasTextFormat.GetSystemFontFamilies()
@@ -200,6 +201,19 @@ public sealed partial class SettingsView : UserControl
     {
         if (!_ready) return;
         _settings.AgentNotifications = AgentAlertToggle.IsOn;
+        Commit();
+    }
+
+    private void OnRemoteGitToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        _settings.RemoteGit = RemoteGitToggle.IsOn;
+        Zharp.Core.Remote.SshGitChannels.Enabled = _settings.RemoteGit;
+
+        // Turning it off closes what is already open rather than waiting for
+        // it to time out. Somebody switching this off means now.
+        if (!_settings.RemoteGit)
+            Zharp.Core.Remote.SshGitChannels.CloseAll();
         Commit();
     }
 

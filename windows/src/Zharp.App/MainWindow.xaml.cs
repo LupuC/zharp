@@ -380,7 +380,9 @@ public sealed partial class MainWindow : Window
 
         // cd'ing into or out of a repository decides whether the title bar
         // carries a diff button at all, so the button follows the prompt.
-        session.WorkingDirectoryChanged += _ =>
+        // Location rather than directory: typing `ssh` changes which machine
+        // the question is about without the local directory moving at all.
+        session.LocationChanged += _ =>
             DispatcherQueue.TryEnqueue(UpdateDiffButtonAsync);
         item.ApplyDisplayOptions(_settings.SidebarTitleIsCwd, _settings.SidebarShowPath);
         item.SetUiZoom(_settings.UiZoom);
@@ -1178,7 +1180,7 @@ public sealed partial class MainWindow : Window
             DiffButton.Visibility = Visibility.Visible;
             _diffView.SetUiZoom(_settings.UiZoom);
 
-            _ = _diffView.SetWorkingDirectoryAsync(LastTerminalDirectory());
+            _ = _diffView.SetLocationAsync(LastTerminalLocation());
             DispatcherQueue.TryEnqueue(UpdateTerminalLayerLayout);
         }
         catch (Exception ex)
@@ -1289,7 +1291,7 @@ public sealed partial class MainWindow : Window
     /// Doing so made the changes button appear on the Settings page, reporting
     /// a repository the visible page has nothing to do with.
     /// </summary>
-    private string? LastTerminalDirectory() => _active?.Session?.WorkingDirectory;
+    private Zharp.Core.Remote.SessionLocation? LastTerminalLocation() => _active?.Session?.Location;
 
     /// <summary>
     /// Shows the title bar diff button only while the active session sits
@@ -1299,16 +1301,16 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            string? cwd = LastTerminalDirectory();
-            if (string.Equals(cwd, _diffButtonCwd, StringComparison.OrdinalIgnoreCase))
+            var cwd = LastTerminalLocation();
+            if (Equals(cwd, _diffButtonCwd))
                 return;
             _diffButtonCwd = cwd;
 
-            string? repo = await GitStatus.DiscoverRepoAsync(cwd);
+            var repo = await GitStatus.DiscoverRepoAsync(cwd);
 
             // The directory may have moved on while git was answering; the
             // later call owns the button.
-            if (!string.Equals(cwd, _diffButtonCwd, StringComparison.OrdinalIgnoreCase))
+            if (!Equals(cwd, _diffButtonCwd))
                 return;
 
             bool onPage = _active?.Session == null;
@@ -1351,7 +1353,7 @@ public sealed partial class MainWindow : Window
             // The panel says "not a git repository" for itself; closing it
             // meant coming back to that session found it gone.
             if (panelOpen && _diffView != null)
-                await _diffView.SetWorkingDirectoryAsync(cwd);
+                await _diffView.SetLocationAsync(cwd);
         }
         catch (Exception ex)
         {
@@ -1360,7 +1362,7 @@ public sealed partial class MainWindow : Window
     }
 
     private Microsoft.UI.Dispatching.DispatcherQueueTimer _diffPoll = null!;
-    private string? _totalsRepo;
+    private Zharp.Core.Remote.SessionLocation? _totalsRepo;
 
     /// <summary>
     /// Keeps the title bar totals current while a repository is open, whether
@@ -1388,11 +1390,16 @@ public sealed partial class MainWindow : Window
     /// compare them against and asking it per file would undo the single-call
     /// saving entirely.
     /// </summary>
-    private async Task RefreshTotalsAsync(string repo)
+    private async Task RefreshTotalsAsync(Zharp.Core.Remote.SessionLocation repo)
     {
         try
         {
             _totalsRepo = repo;
+
+            // Same reasoning as the panel's own poll: a repository on another
+            // machine costs a network round trip to ask, so it is asked less
+            // often than one on this disk.
+            _diffPoll.Interval = TimeSpan.FromSeconds(repo.IsRemote ? 8 : 3);
 
             var numstat = await GitStatus.NumstatAsync(repo);
             int added = 0, removed = 0;
@@ -1409,7 +1416,7 @@ public sealed partial class MainWindow : Window
             }
 
             // The directory may have moved on while git was answering.
-            if (_totalsRepo == repo)
+            if (Equals(_totalsRepo, repo))
                 OnDiffTotalsChanged(added, removed);
         }
         catch (Exception ex)
@@ -1461,7 +1468,7 @@ public sealed partial class MainWindow : Window
     private void OnDiffSplitterCaptureLost(object sender, PointerRoutedEventArgs e) => _resizingDiff = false;
 
     private DiffView? _diffView;
-    private string? _diffButtonCwd;
+    private Zharp.Core.Remote.SessionLocation? _diffButtonCwd;
 
     private string? _currentBackdrop;
 
@@ -2606,5 +2613,11 @@ public sealed partial class MainWindow : Window
             item.Session?.Dispose();
         }
         _sessions.Clear();
+
+        // Connections Zharp opened to read git on other machines are its own
+        // to close. Leaving them would strand an ssh process per host, still
+        // logged in to somebody's server after the terminal has gone.
+        if (App.Windows.Count == 0)
+            Zharp.Core.Remote.SshGitChannels.CloseAll();
     }
 }

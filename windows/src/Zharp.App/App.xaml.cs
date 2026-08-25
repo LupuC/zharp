@@ -117,6 +117,10 @@ public partial class App : Application
         // Started before any session exists, so nothing can be missed.
         AgentSpool.Start();
 
+        // Nothing is dialled from here. This only records whether Zharp is
+        // allowed to, for the first time a session goes somewhere over ssh.
+        Zharp.Core.Remote.SshGitChannels.Enabled = Settings.RemoteGit;
+
         // Off the launch path: these read and may rewrite files on disk, and
         // nothing on screen is waiting for the answer. New sessions pick the
         // hooks up whenever it lands.

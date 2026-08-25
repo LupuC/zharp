@@ -152,10 +152,13 @@ public sealed class SessionItem : INotifyPropertyChanged
         ShellId = shellId;
         _dispatcher = dispatcher;
         IconGlyph = "\uEBEF"; // terminal-2
-        _subtitle = Abbreviate(session.WorkingDirectory);
+        _subtitle = Describe(session.Location);
 
-        session.WorkingDirectoryChanged += cwd =>
-            dispatcher.TryEnqueue(() => Subtitle = Abbreviate(cwd));
+        // Location rather than directory: a tab that has been sent to another
+        // machine kept showing the local folder it was launched from, which is
+        // the one line on the card meant to say where you are.
+        session.LocationChanged += where =>
+            dispatcher.TryEnqueue(() => Subtitle = Describe(where));
         session.CommandExecuted += command =>
             dispatcher.TryEnqueue(() =>
             {
@@ -757,6 +760,20 @@ public sealed class SessionItem : INotifyPropertyChanged
         if (path.StartsWith(Home + "\\", StringComparison.OrdinalIgnoreCase))
             return "~" + path[Home.Length..];
         return path;
+    }
+
+    /// <summary>
+    /// The card's second line: an abbreviated path locally, and the machine
+    /// plus whatever is known of the path once the session is somewhere else.
+    /// "srv1" on its own is the honest answer when the remote shell has not
+    /// said which directory it is in, and it is still more use than the local
+    /// folder the tab happened to start in.
+    /// </summary>
+    private static string Describe(Zharp.Core.Remote.SessionLocation? where)
+    {
+        if (where is not { IsRemote: true })
+            return Abbreviate(where?.Path);
+        return where.HasPath ? $"{where.Remote!.Label}:{where.Path}" : where.Remote!.Label;
     }
 
     public override string ToString() => $"{DisplayTitle} · {DisplaySubtitle}";

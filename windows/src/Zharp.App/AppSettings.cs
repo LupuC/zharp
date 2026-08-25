@@ -74,6 +74,19 @@ public sealed class AppSettings
     public bool AgentNotifications { get; set; } = true;
 
     /// <summary>
+    /// Whether Zharp may open its own ssh connection to read git on a machine
+    /// you are already connected to.
+    ///
+    /// It is one extra login per host, held open while you work there and
+    /// closed after five idle minutes, and it only ever reads. Turn it off on
+    /// a host where every session is audited, or where a second connection
+    /// would trip a login alert: the panel then says where you are and stops
+    /// there, rather than answering with this machine's repository.
+    /// </summary>
+    [JsonPropertyName("remoteGit")]
+    public bool RemoteGit { get; set; } = true;
+
+    /// <summary>
     /// Height of the changed-files list inside the changes panel, in unzoomed
     /// pixels. How many files a repository has says nothing about how many you
     /// want to see at once, so it is worth dragging and worth remembering.

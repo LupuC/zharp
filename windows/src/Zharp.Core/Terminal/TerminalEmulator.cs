@@ -440,7 +440,12 @@ public sealed class TerminalEmulator : IVtHandler
                 break;
             case 7:
                 // OSC 7: file://[host]/path - xterm working-directory convention.
-                SetWorkingDirectory(ParseFileUri(arg));
+                // The host is the half that says which machine the path is on,
+                // and it used to be thrown away. A shell on the far end of an
+                // ssh connection reports its own directory here, so dropping
+                // the host left Zharp holding a path it believed was local.
+                var (host, path) = ParseFileUri(arg);
+                SetWorkingDirectory(path, host);
                 break;
             case 9:
                 // OSC 9;9;<path> - ConEmu/Windows Terminal working-directory
@@ -496,33 +501,76 @@ public sealed class TerminalEmulator : IVtHandler
         AgentReported?.Invoke(rest[(sep + 1)..]);
     }
 
-    private void SetWorkingDirectory(string? path)
+    private void SetWorkingDirectory(string? path, string? host = null)
     {
         if (string.IsNullOrWhiteSpace(path))
             return;
-        path = path.TrimEnd('\\', '/');
-        if (path.Length == 2 && path[1] == ':')
-            path += "\\"; // keep drive roots as C:\
-        if (path == WorkingDirectory)
+
+        bool remote = IsRemoteHost(host);
+        if (remote)
+        {
+            // Left in the far end's own notation. Turning it into a Windows
+            // path would produce something that looks local and is not.
+            path = path.TrimEnd('/');
+            if (path.Length == 0)
+                path = "/";
+        }
+        else
+        {
+            path = path.TrimEnd('\\', '/');
+            if (path.Length == 2 && path[1] == ':')
+                path += "\\"; // keep drive roots as C:\
+        }
+
+        string? newHost = remote ? host : null;
+        if (path == WorkingDirectory && newHost == WorkingDirectoryHost)
             return;
+        WorkingDirectoryHost = newHost;
         WorkingDirectory = path;
         WorkingDirectoryChanged?.Invoke(path);
     }
 
-    private static string? ParseFileUri(string uri)
+    /// <summary>
+    /// The machine <see cref="WorkingDirectory"/> is on, when a shell has said
+    /// so and it is not this one. Null for a local directory, which is the
+    /// usual case and the one every existing caller assumes.
+    /// </summary>
+    public string? WorkingDirectoryHost { get; private set; }
+
+    /// <summary>
+    /// Whether an OSC 7 host names a different computer. An empty host is
+    /// defined by the file URI scheme to mean the local machine, and a shell
+    /// that reports this machine's own name is not somewhere else either.
+    /// </summary>
+    private static bool IsRemoteHost(string? host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+            return false;
+        if (host is "localhost" or "127.0.0.1" or "::1" or "[::1]")
+            return false;
+        return !string.Equals(host, Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static (string? Host, string? Path) ParseFileUri(string uri)
     {
         if (!uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
-            return null;
+            return (null, null);
         string rest = uri[7..];
         int slash = rest.IndexOf('/');
         if (slash < 0)
-            return null;
-        rest = rest[slash..]; // drop host part
-        string path = Uri.UnescapeDataString(rest).Replace('/', '\\');
+            return (null, null);
+
+        string host = Uri.UnescapeDataString(rest[..slash]);
+        string raw = Uri.UnescapeDataString(rest[slash..]);
+
+        if (IsRemoteHost(host))
+            return (host, raw);
+
+        string path = raw.Replace('/', '\\');
         // "/C:\..." → "C:\..."
         if (path.Length >= 3 && path[0] == '\\' && path[2] == ':')
             path = path[1..];
-        return path;
+        return (host, path);
     }
 
     void IVtHandler.CsiDispatch(char prefix, string intermediates, IReadOnlyList<int[]> parameters, char final)

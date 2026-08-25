@@ -27,6 +27,16 @@
             <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
                 <FontIcon Style="{StaticResource TablerIcon}" Glyph="&#xEF6F;" FontSize="14"
                           Foreground="{ThemeResource SubtleIconBrush}" VerticalAlignment="Center" />
+                <!-- Which machine this repository is on, shown only when that
+                     is not this one. A chip reading "local" on every session
+                     would be noise; a chip naming a server is the one fact
+                     that changes what everything below it means. -->
+                <Border x:Name="HostChip" Visibility="Collapsed" VerticalAlignment="Center"
+                        CornerRadius="4" Padding="5,0,5,1"
+                        BorderBrush="{ThemeResource HairlineBrush}" BorderThickness="1">
+                    <TextBlock x:Name="HostText" FontSize="10.5" Opacity="0.75"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </Border>
                 <TextBlock x:Name="RepoText" FontSize="12.5" VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis" />
                 <TextBlock x:Name="BranchText" FontSize="12" VerticalAlignment="Center" Opacity="0.55"
