@@ -311,16 +311,14 @@ public sealed class SessionItem : INotifyPropertyChanged
         bool wasBlocked = _needsAttention;
         NeedsAttention = report.NeedsAttention;
 
-        if (report.Event == AgentEvent.Working && !wasBlocked && _agentSummary != null)
-        {
-            // Nothing to say: this event exists to unstick a stale "waiting for
-            // you", and the line already on screen is the more specific one.
-            // The batch that just resolved is usually the very edit it names.
-        }
-        else
-        {
+        // "Working" has nothing to say unless it is unsticking a stale "waiting
+        // for you". The line already on screen is the more specific one, and
+        // the batch that just resolved is usually the very edit it names.
+        bool keepSpecificLine =
+            report.Event == AgentEvent.Working && !wasBlocked && _agentSummary != null;
+
+        if (!keepSpecificLine)
             _agentSummary = report.Summary.Length > 0 ? report.Summary : null;
-        }
 
         RefreshAgentClock();
 

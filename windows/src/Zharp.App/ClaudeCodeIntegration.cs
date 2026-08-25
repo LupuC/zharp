@@ -65,10 +65,21 @@ public static class ClaudeCodeIntegration
     {
         try
         {
-            if (!enabled)
-                return;
             if (!IsClaudeCodePresent)
                 return; // do not create a Claude config for someone without Claude
+
+            if (!enabled)
+            {
+                // Switched off has to mean gone, not merely "not added again".
+                // Leaving a previous install in place would keep the hooks
+                // running for somebody who has said they do not want them.
+                if (!IsConnected())
+                    return;
+                Disconnect();
+                App.Log($"claude code: hooks removed from {SettingsPath}");
+                return;
+            }
+
             if (IsCurrent())
                 return;
 

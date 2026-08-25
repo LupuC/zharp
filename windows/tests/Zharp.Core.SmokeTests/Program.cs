@@ -416,6 +416,70 @@ static Cell CellAt(TerminalEmulator e, int row, int col) =>
         $"cursor-disconnected B is not pending input (got '{e.PeekPendingCommand()}')");
 }
 
+// --- agent reports (OSC 777) ---------------------------------------------------
+
+{
+    var e = NewEmu();
+    string? payload = null;
+    e.AgentReported += body => payload = body;
+
+    Feed(e, "\x1b]777;notify;zharp://agent;{\"v\":1,\"event\":\"done\"}\x07");
+    Check(payload == "{\"v\":1,\"event\":\"done\"}", $"OSC 777 agent report (got '{payload}')");
+
+    // A JSON body is full of semicolons and colons; only the first two
+    // separators belong to the OSC framing.
+    payload = null;
+    Feed(e, "\x1b]777;notify;zharp://agent;{\"a\":\"x;y\",\"b\":\"z\"}\x07");
+    Check(payload == "{\"a\":\"x;y\",\"b\":\"z\"}", $"semicolons inside the body survive (got '{payload}')");
+
+    // Somebody else's notification travelling through the same pty.
+    payload = null;
+    Feed(e, "\x1b]777;notify;warp://cli-agent;{\"v\":1}\x07");
+    Check(payload == null, "another terminal's OSC 777 is ignored");
+
+    payload = null;
+    Feed(e, "\x1b]777;notify;zharp://agent\x07");
+    Feed(e, "\x1b]777;something-else;zharp://agent;{}\x07");
+    Check(payload == null, "malformed OSC 777 raises nothing");
+}
+
+// --- prompt return, which is how an exited agent is noticed --------------------
+
+{
+    var e = NewEmu(40, 6);
+    int returned = 0;
+    e.PromptReturned += () => returned++;
+
+    Feed(e, "\x1b]133;A\x07$ ");
+    Check(returned == 0, "the first prompt is not a return");
+
+    Feed(e, "\x1b]133;A\x07");
+    Check(returned == 0, "redrawing the same prompt is not a return");
+
+    // Run something, then the shell prompts again below it.
+    Feed(e, "claude\r\noutput\r\n\x1b]133;A\x07$ ");
+    Check(returned == 1, $"a fresh prompt below the last one is (got {returned})");
+
+    Feed(e, "\x1b]133;A\x07");
+    Check(returned == 1, $"and does not fire twice for it (got {returned})");
+
+    Feed(e, "\r\nmore\r\n\x1b]133;A\x07$ ");
+    Check(returned == 2, $"every later command reports too (got {returned})");
+}
+
+{
+    // A full screen program owns the alternate buffer, and the prompt marks it
+    // paints there are its own business.
+    var e = NewEmu(40, 6);
+    int returned = 0;
+    e.PromptReturned += () => returned++;
+    Feed(e, "\x1b]133;A\x07$ ");
+    Feed(e, "\x1b[?1049h");
+    Feed(e, "\r\n\x1b]133;A\x07\r\n\x1b]133;A\x07");
+    Feed(e, "\x1b[?1049l");
+    Check(returned == 0, $"alt buffer prompt marks are not returns (got {returned})");
+}
+
 Console.WriteLine();
 Console.WriteLine(failures == 0
     ? $"All {passed} checks passed."
