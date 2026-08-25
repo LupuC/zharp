@@ -480,6 +480,38 @@ static Cell CellAt(TerminalEmulator e, int row, int col) =>
     Check(returned == 0, $"alt buffer prompt marks are not returns (got {returned})");
 }
 
+// --- alternate screen restore, which is how a TUI leaves no mess behind -------
+
+{
+    var e = NewEmu(20, 5);
+    Feed(e, "shell line one\r\nshell line two");
+
+    // A full screen program takes the alternate buffer and paints over it.
+    Feed(e, "\x1b[?1049h");
+    Feed(e, "\x1b[2J\x1b[H");
+    Feed(e, "TUI FRAME\r\nbox border here");
+    Check(RowText(e, 0) == "TUI FRAME", "alt buffer shows the program");
+
+    // Leaving it must put back exactly what was underneath.
+    Feed(e, "\x1b[?1049l");
+    Check(RowText(e, 0) == "shell line one", $"alt exit restores row 0 (got '{RowText(e, 0)}')");
+    Check(RowText(e, 1) == "shell line two", $"alt exit restores row 1 (got '{RowText(e, 1)}')");
+    Check(!e.IsAlternateBuffer, "alt exit leaves the main buffer active");
+}
+
+{
+    // A program that paints inline, with no alternate buffer at all, is
+    // entitled to leave its last frame on screen: that is scrollback, and the
+    // shell simply prompts underneath it.
+    var e = NewEmu(20, 5);
+    Feed(e, "\x1b]133;A\x07$ ");
+    Feed(e, "codex\r\n");
+    Feed(e, "box border here\r\n");
+    Feed(e, "\x1b]133;A\x07$ ");
+    Check(RowText(e, 1) == "box border here", $"inline TUI output stays in scrollback (got '{RowText(e, 1)}')");
+    Check(RowText(e, 2) == "$", $"and the shell prompts underneath it (got '{RowText(e, 2)}')");
+}
+
 Console.WriteLine();
 Console.WriteLine(failures == 0
     ? $"All {passed} checks passed."

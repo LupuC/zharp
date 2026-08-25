@@ -179,7 +179,27 @@ public sealed class TerminalView : UserControl, IDisposable
         PointerWheelChanged += OnPointerWheelChanged;
 
         _session.OutputArrived += OnOutputArrived;
+
+        // Whether a program is running in the foreground. Set when a command is
+        // submitted, cleared when the shell draws its next prompt.
+        _session.CommandExecuted += _ => _foregroundBusy = true;
+        _session.PromptReturned += () => _foregroundBusy = false;
     }
+
+    /// <summary>
+    /// True between a command being submitted and the shell prompting again.
+    ///
+    /// The prompt marks alone cannot tell: a full screen program that does not
+    /// take the alternate buffer, which is most of the agent CLIs, leaves the
+    /// last prompt's marks sitting there looking live while it paints over the
+    /// screen. Arrow Up then opened Zharp's history on top of a running Codex
+    /// instead of reaching Codex's own menu.
+    ///
+    /// Written on the pty thread and read on the UI thread. A stale read is
+    /// worth nothing more than one keystroke going the wrong way, which is why
+    /// this is a volatile bool rather than a lock on the input path.
+    /// </summary>
+    private volatile bool _foregroundBusy;
 
     public TerminalSession Session => _session;
 
@@ -2426,6 +2446,13 @@ public sealed class TerminalView : UserControl, IDisposable
     {
         if (_historyPanel.Visibility == Visibility.Visible)
             return false;
+
+        // Something is running. Arrow Up belongs to it, not to us: an agent CLI
+        // uses it to move around its own menus, and the shell is not at a
+        // prompt to put a command on anyway.
+        if (_foregroundBusy)
+            return false;
+
         var emu = _session.Emulator;
         lock (emu.SyncRoot)
         {
