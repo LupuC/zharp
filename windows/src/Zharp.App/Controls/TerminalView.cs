@@ -388,8 +388,36 @@ public sealed class TerminalView : UserControl, IDisposable
 
     // ---------------------------------------------------------------- output pump
 
+    /// <summary>
+    /// How long a program may hold the screen mid frame before it is shown
+    /// anyway. Only reached by a program that set synchronized output and then
+    /// died or stalled; a frozen terminal is worse than a torn frame.
+    /// </summary>
+    private const int MaxHoldMs = 120;
+
+    private long _holdingSince;
+
     private void OnOutputArrived()
     {
+        // Mid frame: the program has said it is still painting. Showing this
+        // would be showing a cleared screen, or half a redraw, which is what
+        // flickering is made of. The sequence that ends the frame is itself
+        // output, so it brings us straight back here to paint the whole thing.
+        var emulator = _session.Emulator;
+        bool holding;
+        lock (emulator.SyncRoot)
+            holding = emulator.SynchronizedOutput;
+
+        if (holding)
+        {
+            long now = Environment.TickCount64;
+            if (_holdingSince == 0)
+                _holdingSince = now;
+            if (now - _holdingSince < MaxHoldMs)
+                return;
+        }
+        _holdingSince = 0;
+
         if (Interlocked.CompareExchange(ref _invalidatePending, 1, 0) == 0)
         {
             DispatcherQueue.TryEnqueue(() =>
@@ -474,7 +502,14 @@ public sealed class TerminalView : UserControl, IDisposable
             // anchored to the bottom edge, classic is chronological flowing
             // from the top until content overflows (then it follows the
             // prompt, exactly like a traditional terminal).
-            if (!emu.IsAlternateBuffer)
+            // Blocks are for the output of commands. A program painting the
+            // whole screen decides what goes on every row itself, and laying
+            // that out by command instead swallowed it: Codex's menus and
+            // dialogs were parsed correctly and then never drawn, because the
+            // block layout had no row to put them on. Most such programs take
+            // the alternate buffer; the agent CLIs do not, which is why the
+            // marks from the last real prompt were still being believed.
+            if (!emu.IsAlternateBuffer && !emu.FullScreenPaint)
             {
                 var marks = emu.GetPromptMarks();
                 if (marks.Count > 0)

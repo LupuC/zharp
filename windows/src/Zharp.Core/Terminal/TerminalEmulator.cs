@@ -157,7 +157,12 @@ public sealed class TerminalEmulator : IVtHandler
 
         // After the bookkeeping, so anyone listening sees settled state.
         if (freshPrompt)
+        {
+            // The shell is back, so whatever was painting the screen is gone
+            // and its output is history again.
+            FullScreenPaint = false;
             PromptReturned?.Invoke();
+        }
     }
 
     /// <summary>True when the live prompt has a valid prompt-end mark - i.e.
@@ -530,6 +535,8 @@ public sealed class TerminalEmulator : IVtHandler
         {
             if (intermediates == " " && final == 'q') // DECSCUSR
                 CursorStyle = P(0);
+            else if (intermediates == "$" && final == 'p') // DECRQM
+                ReportMode(prefix, P(0));
             return;
         }
 
@@ -988,6 +995,67 @@ public sealed class TerminalEmulator : IVtHandler
         }
     }
 
+    /// <summary>
+    /// DEC mode 2026, synchronized output: the program is painting a frame and
+    /// does not want it shown half finished.
+    ///
+    /// Full screen programs redraw the whole screen for every keystroke, and
+    /// without this the terminal happily shows the cleared screen before the
+    /// repaint lands. That is what flickering is. Zharp holds the last complete
+    /// frame until the program says it is done.
+    /// </summary>
+    public bool SynchronizedOutput { get; private set; }
+
+    /// <summary>
+    /// A program is painting the whole screen itself, rather than printing
+    /// output a line at a time the way a command does.
+    ///
+    /// This matters because Zharp lays prompt-marked output out as command
+    /// blocks, which is right for the output of a command and wrong for a
+    /// program that decides what goes on every row. Most full screen programs
+    /// take the alternate buffer and are obvious; the agent CLIs paint in the
+    /// main buffer, so the marks from the last real prompt are still sitting
+    /// there and the block layout swallowed the whole interface.
+    ///
+    /// Synchronized output is the tell. A program only asks for its frames to
+    /// be presented whole if it is drawing frames, and no shell does it. Stays
+    /// set for as long as the program runs, and is cleared by the shell getting
+    /// its prompt back.
+    /// </summary>
+    public bool FullScreenPaint { get; private set; }
+
+    /// <summary>
+    /// Answers DECRQM, "is this mode supported, and is it on".
+    ///
+    /// This matters more than it looks: a program asks before it uses a mode,
+    /// and silence reads as no. Supporting synchronized output without
+    /// answering this would have left every program still flickering, because
+    /// none of them would ever have turned it on.
+    ///
+    /// Reply values are the DEC ones: 0 not recognized, 1 set, 2 reset.
+    /// </summary>
+    private void ReportMode(char prefix, int mode)
+    {
+        if (prefix != '?')
+        {
+            // ANSI modes. None are implemented, and saying so plainly is
+            // better than staying silent, which reads as a dead terminal.
+            Respond($"\x1b[{mode};0$y");
+            return;
+        }
+
+        int state = mode switch
+        {
+            2026 => SynchronizedOutput ? 1 : 2,
+            1049 => IsAlternateBuffer ? 1 : 2,
+            2004 => BracketedPaste ? 1 : 2,
+            25 => CursorVisible ? 1 : 2,
+            7 => _autoWrap ? 1 : 2,
+            _ => 0,
+        };
+        Respond($"\x1b[?{mode};{state}$y");
+    }
+
     private void SetPrivateModes(IReadOnlyList<int[]> parameters, bool set)
     {
         foreach (var group in parameters)
@@ -1035,6 +1103,11 @@ public sealed class TerminalEmulator : IVtHandler
                 case 1004: FocusEvents = set; break;
                 case 1006: break; // SGR mouse encoding, accepted silently
                 case 2004: BracketedPaste = set; break;
+                case 2026:
+                    SynchronizedOutput = set;
+                    if (set)
+                        FullScreenPaint = true;
+                    break;
             }
         }
     }
@@ -1190,6 +1263,11 @@ public sealed class TerminalEmulator : IVtHandler
         ApplicationKeypad = false;
         BracketedPaste = false;
         FocusEvents = false;
+
+        // A reset must never leave the screen held: a program that died halfway
+        // through a frame would otherwise freeze the terminal on its last one.
+        SynchronizedOutput = false;
+        FullScreenPaint = false;
         _mouseMode = 0;
         _g0 = 'B';
         _g1 = 'B';

@@ -512,6 +512,86 @@ static Cell CellAt(TerminalEmulator e, int row, int col) =>
     Check(RowText(e, 2) == "$", $"and the shell prompts underneath it (got '{RowText(e, 2)}')");
 }
 
+// --- synchronized output (mode 2026), which is what stops the flicker --------
+
+{
+    var e = NewEmu();
+    Check(!e.SynchronizedOutput, "not holding by default");
+
+    Feed(e, "\x1b[?2026h");
+    Check(e.SynchronizedOutput, "2026h holds the frame");
+
+    Feed(e, "\x1b[?2026l");
+    Check(!e.SynchronizedOutput, "2026l releases it");
+
+    // A program that dies mid frame must not leave the screen held forever.
+    //  rather than \x1b: a C# \x escape eats as many hex digits as it
+    // can find, so "\x1bc" is the single character U+01BC, not ESC then c.
+    Feed(e, "\x1b[?2026h");
+    Feed(e, "c");
+    Check(!e.SynchronizedOutput, "a full reset releases it");
+}
+
+{
+    // DECRQM. A program asks before it uses a mode, and silence reads as no,
+    // so answering is what makes the mode above worth having.
+    var e = NewEmu();
+    string reply = "";
+    e.ResponseRequested += r => reply += r;
+
+    Feed(e, "\x1b[?2026$p");
+    Check(reply == "\x1b[?2026;2$y", $"DECRQM: 2026 supported, currently reset (got '{Vis(reply)}')");
+
+    reply = "";
+    Feed(e, "\x1b[?2026h\x1b[?2026$p");
+    Check(reply == "\x1b[?2026;1$y", $"DECRQM: reports it as set (got '{Vis(reply)}')");
+    Feed(e, "\x1b[?2026l");
+
+    reply = "";
+    Feed(e, "\x1b[?9999$p");
+    Check(reply == "\x1b[?9999;0$y", $"DECRQM: unknown mode is not recognized (got '{Vis(reply)}')");
+
+    reply = "";
+    Feed(e, "\x1b[?2004h\x1b[?2004$p");
+    Check(reply == "\x1b[?2004;1$y", $"DECRQM: bracketed paste reports set (got '{Vis(reply)}')");
+
+    // DECRQM must not be mistaken for anything else that ends in p.
+    reply = "";
+    Feed(e, "\x1b[?25$p");
+    Check(reply == "\x1b[?25;1$y", $"DECRQM: cursor visible reports set (got '{Vis(reply)}')");
+}
+
+static string Vis(string s) => s.Replace("\x1b", "<ESC>");
+
+// --- full screen paint, which decides blocks versus plain rows ----------------
+
+{
+    var e = NewEmu(40, 10);
+    Check(!e.FullScreenPaint, "a plain shell is not painting the screen");
+
+    Feed(e, "\x1b]133;A\x07$ ");
+    Feed(e, "ls\r\nfile-one\r\n");
+    Feed(e, "\x1b]133;A\x07$ ");
+    Check(!e.FullScreenPaint, "ordinary command output is not either");
+
+    // A program that draws frames says so by asking for them to be presented
+    // whole, and no shell ever does.
+    Feed(e, "codex\r\n");
+    Feed(e, "\x1b[?2026h");
+    Feed(e, "\x1b[5;1Hmenu row");
+    Feed(e, "\x1b[?2026l");
+    Check(e.FullScreenPaint, "synchronized frames mark a full screen program");
+
+    // It has to stay set between frames, or the layout would flip back and
+    // forth on every repaint.
+    Feed(e, "\x1b[6;1Hanother row");
+    Check(e.FullScreenPaint, "and stays set between its frames");
+
+    // The shell getting its prompt back means the program is gone.
+    Feed(e, "\r\n\x1b]133;A\x07$ ");
+    Check(!e.FullScreenPaint, "a returned prompt clears it");
+}
+
 Console.WriteLine();
 Console.WriteLine(failures == 0
     ? $"All {passed} checks passed."

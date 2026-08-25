@@ -107,12 +107,13 @@ function report() {
 
     case 'tool': {
       file = editedFile(tool, input);
-      const name = file ? path.basename(file) : target;
-      summary = name ? shown + ' ' + name : shown;
 
-      // Codex has no once-per-batch event, so this fires for every tool call.
-      // That is affordable here and doubles as the signal that the agent is
-      // running again after a permission prompt was answered.
+      // Only a write earns its own line. Codex has no once-per-batch event, so
+      // this fires for every tool call, and naming each one turned the tab into
+      // a scrolling log of shell commands - a whole cmd.exe line, arguments and
+      // all, where the useful answer was "working". Writes are different: the
+      // file is what the changes panel is about to show you.
+      summary = file ? shown + ' ' + path.basename(file) : 'Working';
       break;
     }
 
