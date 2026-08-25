@@ -143,6 +143,19 @@ public sealed class TerminalSession : IDisposable
     {
         var pty = _pty!;
         var buffer = new byte[65536];
+
+        // Opened once, if at all. This used to read the environment and open,
+        // append to and close a file on every single read, on the thread every
+        // keystroke has to come back through. A program mid animation sends a
+        // chunk per letter, so recording a session made the terminal feel
+        // exactly as slow as it was.
+        FileStream? dump = null;
+        if (Environment.GetEnvironmentVariable("ZHARP_DUMP_PTY") is { Length: > 0 } path)
+        {
+            try { dump = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read); }
+            catch { }
+        }
+
         try
         {
             while (!_disposed)
@@ -150,9 +163,9 @@ public sealed class TerminalSession : IDisposable
                 int read = pty.Output.Read(buffer, 0, buffer.Length);
                 if (read <= 0)
                     break;
-                if (Environment.GetEnvironmentVariable("ZHARP_DUMP_PTY") is { Length: > 0 } dump)
+                if (dump != null)
                 {
-                    try { using var fs = new FileStream(dump, FileMode.Append); fs.Write(buffer, 0, read); }
+                    try { dump.Write(buffer, 0, read); dump.Flush(); }
                     catch { }
                 }
                 Emulator.Feed(buffer.AsSpan(0, read));
@@ -168,6 +181,10 @@ public sealed class TerminalSession : IDisposable
         }
         catch (ObjectDisposedException)
         {
+        }
+        finally
+        {
+            dump?.Dispose();
         }
     }
 

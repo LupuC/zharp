@@ -438,7 +438,16 @@ public sealed class TerminalView : UserControl, IDisposable
             _paintTimer.Tick += (_, _) => PaintTick();
         }
         if (!_paintTimer.IsRunning)
+        {
             _paintTimer.Start();
+
+            // Paint at once on the way in. Waiting a whole interval for the
+            // first frame after an idle gap is what makes typing feel heavy:
+            // a keystroke arrives alone, and there is nothing to coalesce it
+            // with. Only a program already painting continuously keeps the
+            // timer running, and that is the case the clock exists for.
+            PaintTick();
+        }
     }
 
     private void PaintTick()
