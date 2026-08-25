@@ -443,20 +443,50 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // The tab always carries its badge. This is only about reaching you
+        // somewhere else, which is exactly the part worth being able to switch
+        // off, so it is the only part the setting governs.
+        if (!_settings.AgentNotifications)
+            return;
+
         FlashTaskbar();
 
         try
         {
             var toast = new Microsoft.Windows.AppNotifications.Builder.AppNotificationBuilder()
                 .AddText($"{item.SessionName} needs you")
-                .AddText($"{item.Subtitle} - {item.DisplaySubtitle}")
+                .AddText($"{item.DisplaySubtitle} - {item.Subtitle}")
+                // Tagged so the click lands on this session. Without it every
+                // notification Zharp raises went to the same handler, and an
+                // agent asking a question opened the update page.
+                .AddArgument("action", "agent")
+                .AddArgument("session", item.Id.ToString())
                 .BuildNotification();
             Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(toast);
+            App.Log($"agent toast: {item.SessionName} - {item.DisplaySubtitle}");
         }
         catch (Exception ex)
         {
             // A toast is a courtesy. The badge and the taskbar already said it.
-            App.Log($"agent toast: {ex.Message}");
+            App.Log($"agent toast failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Brings up the session a notification was raised for. The tab may have
+    /// been dragged to another window, or closed outright, since the toast was
+    /// shown, so the session is looked up rather than remembered.
+    /// </summary>
+    internal static void ShowAgentSession(int id)
+    {
+        foreach (var window in App.Windows.ToList())
+        {
+            var item = window._sessions.FirstOrDefault(s => s.Id == id);
+            if (item == null)
+                continue;
+            window.Activate();
+            window.ActivateSession(item);
+            return;
         }
     }
 

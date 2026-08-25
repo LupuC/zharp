@@ -66,10 +66,19 @@ public sealed class AppSettings
     public bool SidebarVisible { get; set; } = true;
 
     /// <summary>
-    /// When true, Zharp keeps the AI agent hooks installed so agents report
-    /// their own status. On by default: it is what makes a tab able to say the
-    /// agent is waiting for you, and an integration nobody switches on is one
-    /// nobody has. Turning it off removes the hooks and keeps them off.
+    /// Desktop notification plus a taskbar flash when an AI agent is waiting
+    /// for you and Zharp is not the window in front. The tab card says so
+    /// regardless; this is only about interrupting you elsewhere.
+    /// </summary>
+    [JsonPropertyName("agentNotifications")]
+    public bool AgentNotifications { get; set; } = true;
+
+    /// <summary>
+    /// Whether the AI agent hooks stay installed. Deliberately has no switch in
+    /// Settings: agent support is part of the terminal, not a feature to go and
+    /// find, and a tab that cannot say its agent is blocked is the whole thing
+    /// this exists to fix. It is here so that someone deploying Zharp somewhere
+    /// that forbids touching an agent's config can set it to false by hand.
     /// </summary>
     [JsonPropertyName("agentIntegration")]
     public bool AgentIntegration { get; set; } = true;

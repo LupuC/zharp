@@ -90,9 +90,22 @@ public partial class App : Application
         {
             // Toast support for the update notifier. Subscribe before Register
             // so clicks land even for toasts shown earlier this session.
-            AppNotificationManager.Default.NotificationInvoked += (_, _) =>
-                (Main as MainWindow)?.DispatcherQueue.TryEnqueue(
-                    () => (Main as MainWindow)?.ShowUpdatePage());
+            AppNotificationManager.Default.NotificationInvoked += (_, e) =>
+            {
+                // Zharp raises more than one kind of notification now, so the
+                // click has to be routed. Untagged means the update toast,
+                // which is the only one that predates the argument.
+                e.Arguments.TryGetValue("action", out string? action);
+                e.Arguments.TryGetValue("session", out string? session);
+
+                (Main as MainWindow)?.DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (action == "agent" && int.TryParse(session, out int id))
+                        MainWindow.ShowAgentSession(id);
+                    else
+                        (Main as MainWindow)?.ShowUpdatePage();
+                });
+            };
             AppNotificationManager.Default.Register();
         }
         catch (Exception ex)

@@ -109,13 +109,27 @@ public sealed class TerminalEmulator : IVtHandler
     /// mark to the end of its soft-wrap chain). Not raised for empty prompts.</summary>
     public event Action<string>? CommandExecuted;
 
+    /// <summary>
+    /// The shell has drawn a fresh prompt below the last one, so whatever was
+    /// running in the foreground has exited.
+    ///
+    /// This is the only completely reliable way to know an agent is gone. An
+    /// agent's own "session ended" hook fires while its process is tearing
+    /// itself down, which is the worst possible moment to be asking it to write
+    /// to the terminal, and a report that never arrives leaves a tab claiming
+    /// to be busy forever. A prompt coming back cannot be missed.
+    /// </summary>
+    public event Action? PromptReturned;
+
     private void RecordPromptMark()
     {
         long raw = _main.DroppedLines + _main.ScrollbackCount + CursorY;
 
         // A genuinely NEW prompt below the last one means the previous block
         // just finished - report the command that ran in it.
-        if (_promptMarksRaw.Count > 0 && raw > _promptMarksRaw[^1] && CommandExecuted != null)
+        bool freshPrompt = _promptMarksRaw.Count > 0 && raw > _promptMarksRaw[^1];
+
+        if (freshPrompt && CommandExecuted != null)
         {
             long prevMark = _promptMarksRaw[^1];
             for (int i = _promptEndMarksRaw.Count - 1; i >= 0; i--)
@@ -140,6 +154,10 @@ public sealed class TerminalEmulator : IVtHandler
         _promptMarksRaw.Add(raw);
         if (_promptMarksRaw.Count > 256)
             _promptMarksRaw.RemoveAt(0);
+
+        // After the bookkeeping, so anyone listening sees settled state.
+        if (freshPrompt)
+            PromptReturned?.Invoke();
     }
 
     /// <summary>True when the live prompt has a valid prompt-end mark - i.e.

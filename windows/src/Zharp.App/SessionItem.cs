@@ -54,6 +54,12 @@ public sealed class SessionItem : INotifyPropertyChanged
 
     public bool IsSettings => Session == null;
 
+    private static int _nextId;
+
+    /// <summary>Identifies this tab to things outside the app that have to name
+    /// it later, which today means a desktop notification's click target.</summary>
+    public int Id { get; } = Interlocked.Increment(ref _nextId);
+
     /// <summary>
     /// Whether the changes panel is open for THIS session.
     ///
@@ -198,6 +204,27 @@ public sealed class SessionItem : INotifyPropertyChanged
             if (AgentReport.Parse(payload) is { } report)
                 dispatcher.TryEnqueue(() => ApplyReport(report));
         };
+        session.PromptReturned += () => dispatcher.TryEnqueue(AgentFinished);
+    }
+
+    /// <summary>
+    /// The shell is back at its prompt, so nothing is running in the foreground
+    /// and any agent this tab was showing has exited.
+    ///
+    /// The agent's own "session ended" hook is not enough on its own. It fires
+    /// while the process is tearing down, which is the worst moment to ask it
+    /// to write to the terminal, and quitting Claude left a tab counting up
+    /// "Working" forever. The prompt coming back cannot be missed, needs no
+    /// cooperation from the agent, and works just as well for the agents that
+    /// report nothing at all.
+    /// </summary>
+    private void AgentFinished()
+    {
+        if (_agent < 0)
+            return;
+        NeedsAttention = false;
+        if (SetAgent(-1))
+            NotifyDisplayChanged();
     }
 
     /// <summary>
@@ -546,6 +573,12 @@ public sealed class SessionItem : INotifyPropertyChanged
             _turnStart = default;
             StopClock();
             SetAgentStatus(null);
+
+            // Reading the screen comes back for whatever runs next. Refusing to
+            // fall back was about one agent's run, where a guess arriving after
+            // a report would overrule it; across runs it would just mean that
+            // starting an agent without hooks in this tab showed nothing at all.
+            _reports = false;
         }
         Notify(nameof(StandardIconVisibility));
         Notify(nameof(ClaudeIconVisibility));

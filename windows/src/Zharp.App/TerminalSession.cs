@@ -43,6 +43,10 @@ public sealed class TerminalSession : IDisposable
     /// Raised on the pty thread with the raw JSON body.</summary>
     public event Action<string>? AgentReported;
 
+    /// <summary>The shell is back at a fresh prompt, so whatever was running in
+    /// the foreground has exited.</summary>
+    public event Action? PromptReturned;
+
     public TerminalSession(string commandLine, string? workingDirectory, string initialTitle,
         int scrollbackLines = 10000)
     {
@@ -65,6 +69,7 @@ public sealed class TerminalSession : IDisposable
         Emulator.CommandExecuted += cmd => CommandExecuted?.Invoke(cmd);
         Emulator.BellRang += () => Bell?.Invoke();
         Emulator.AgentReported += payload => AgentReported?.Invoke(payload);
+        Emulator.PromptReturned += () => PromptReturned?.Invoke();
     }
 
     public void EnsureStarted(int cols, int rows)

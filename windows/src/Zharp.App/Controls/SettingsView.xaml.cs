@@ -25,7 +25,7 @@ public sealed partial class SettingsView : UserControl
         InitializeComponent();
 
         // About stays last: ShowAbout() selects by the end of this list.
-        _pages = [AppearancePage, TerminalPage, ShellPage, AgentsPage, ShortcutsPage, AboutPage];
+        _pages = [AppearancePage, TerminalPage, ShellPage, ShortcutsPage, AboutPage];
         LoadValues();
         NavRail.SelectedIndex = 0;
     }
@@ -50,8 +50,8 @@ public sealed partial class SettingsView : UserControl
         TitleModeCombo.SelectedIndex = _settings.SidebarTitleIsCwd ? 1 : 0;
         ShowPathToggle.IsOn = _settings.SidebarShowPath;
         ShowSearchToggle.IsOn = _settings.SidebarShowSearch;
+        AgentAlertToggle.IsOn = _settings.AgentNotifications;
         BuildShortcutRows();
-        RefreshClaudeRow();
 
         var familyNames = CanvasTextFormat.GetSystemFontFamilies()
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
@@ -194,79 +194,13 @@ public sealed partial class SettingsView : UserControl
         int index = NavRail.SelectedIndex;
         for (int i = 0; i < _pages.Length; i++)
             _pages[i].Visibility = i == index ? Visibility.Visible : Visibility.Collapsed;
-
-        // Claude Code's settings file is edited by hand and by Claude Code
-        // itself. Re-reading it on the way in beats showing what was true when
-        // this page was last built.
-        if (ReferenceEquals(_pages[index], AgentsPage))
-            RefreshClaudeRow();
     }
 
-    // ---------------------------------------------------------------- AI agents
-
-    private void RefreshClaudeRow()
-    {
-        bool wasReady = _ready;
-        _ready = false; // setting IsOn below must not read as the user toggling
-        try
-        {
-            if (!ClaudeCodeIntegration.IsClaudeCodePresent)
-            {
-                ClaudeToggle.IsOn = false;
-                ClaudeToggle.IsEnabled = false;
-                ClaudeStatusText.Text = "Not installed on this machine.";
-                ClaudeHint.Text = "";
-                return;
-            }
-
-            ClaudeToggle.IsEnabled = true;
-            ClaudeToggle.IsOn = _settings.AgentIntegration;
-
-            bool connected = ClaudeCodeIntegration.IsConnected();
-            ClaudeStatusText.Text = _settings.AgentIntegration
-                ? connected
-                    ? "Reporting its own status to Zharp."
-                    : "Will be set up the next time Zharp starts."
-                : "Off. Status is being read off the screen.";
-
-            // Say plainly which file this writes to. It is the user's config
-            // and Zharp edits it without being asked, so the least it can do is
-            // be specific about where, and about how to undo it without us.
-            ClaudeHint.Text = _settings.AgentIntegration
-                ? $"Lifecycle hooks in {ClaudeCodeIntegration.SettingsPath} run a script that ships with Zharp. Nothing else in that file is touched, a copy of the original is kept beside it, and the hooks do nothing in other terminals."
-                : $"Zharp has taken its hooks back out of {ClaudeCodeIntegration.SettingsPath} and will leave them out.";
-        }
-        finally
-        {
-            _ready = wasReady;
-        }
-    }
-
-    private void OnClaudeToggled(object sender, RoutedEventArgs e)
+    private void OnAgentAlertToggled(object sender, RoutedEventArgs e)
     {
         if (!_ready) return;
-        try
-        {
-            _settings.AgentIntegration = ClaudeToggle.IsOn;
-            Commit();
-
-            if (ClaudeToggle.IsOn)
-                ClaudeCodeIntegration.Connect();
-            else
-                ClaudeCodeIntegration.Disconnect();
-
-            RefreshClaudeRow();
-
-            // Hooks are read when a session starts, so nothing already running
-            // changes. Better to say so than to let them wonder why.
-            ClaudeHint.Text += " Open a new Claude Code session for this to take effect.";
-        }
-        catch (Exception ex)
-        {
-            App.Log($"claude code: {ex.Message}");
-            ClaudeStatusText.Text = "Could not update the Claude Code settings.";
-            ClaudeHint.Text = ex.Message;
-        }
+        _settings.AgentNotifications = AgentAlertToggle.IsOn;
+        Commit();
     }
 
     // ---------------------------------------------------------------- handlers

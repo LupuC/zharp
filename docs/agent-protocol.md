@@ -49,6 +49,7 @@ Events:
 | `start` | the agent starts in this session | the agent's logo on the tab |
 | `prompt` | a prompt is submitted | working, with the turn clock running |
 | `tool` | a tool that writes a file finished | the file it wrote, and the changes panel follows it |
+| `working` | a batch of tool calls resolved | nothing new, unless it clears a stale "needs you" |
 | `permission` | the agent is blocked asking permission | **needs you**, and how long it has been waiting |
 | `idle` | the agent has been waiting long enough to say so | **needs you**, and how long it has been waiting |
 | `done` | the turn ended | done, in green, with how long the turn took |
@@ -119,9 +120,20 @@ acceptable is that it is narrow and reversible:
 - the write is a move over the top, so a crash halfway cannot truncate it
 - the hooks do nothing in any other terminal, because the script exits
   immediately when `ZHARP_AGENT_PROTOCOL` is absent
-- **Settings → AI agents** turns it off, which removes the hooks and keeps them
-  removed on later startups
 - nothing is written at all if Claude Code is not installed
+- `"agentIntegration": false` in Zharp's own settings stops it and takes the
+  hooks back out
+
+That last one has no switch in the Settings UI, deliberately. Agent support is
+part of the terminal rather than a feature to go and find, and a tab that
+cannot say its agent is blocked is the whole thing this exists to fix. The key
+is there for somebody deploying Zharp where touching an agent's config is not
+allowed, not as a preference to weigh up.
+
+What *is* in Settings is whether being interrupted is welcome: **Terminal →
+Notifications** controls the desktop notification and taskbar flash raised when
+an agent needs you and Zharp is not the window in front. The tab badge is not
+part of that and always shows.
 
 Startup also repairs the hooks rather than only adding them. An update moves
 the executable, which leaves hooks pointing at a script path that no longer
@@ -133,6 +145,7 @@ the current script and rewrites the set when any of them does not.
 | `start` | `SessionStart` | `startup\|resume\|clear` |
 | `prompt` | `UserPromptSubmit` | |
 | `tool` | `PostToolUse` | `Edit\|Write\|NotebookEdit` |
+| `working` | `PostToolBatch` | |
 | `permission` | `PermissionRequest` | |
 | `idle` | `Notification` | `idle_prompt` |
 | `done` | `Stop` | |
