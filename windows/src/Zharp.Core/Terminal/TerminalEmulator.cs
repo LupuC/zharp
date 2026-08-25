@@ -1004,7 +1004,16 @@ public sealed class TerminalEmulator : IVtHandler
     /// repaint lands. That is what flickering is. Zharp holds the last complete
     /// frame until the program says it is done.
     /// </summary>
-    public bool SynchronizedOutput { get; private set; }
+    private volatile bool _synchronizedOutput;
+
+    /// <summary>
+    /// Readable without taking <see cref="SyncRoot"/>, deliberately. The UI
+    /// thread checks this before every paint, and the pty thread holds the lock
+    /// for as long as it takes to parse a chunk. Taking the lock here meant the
+    /// interface stalled whenever a chatty program sent a big one, which looks
+    /// exactly like a keystroke taking a second to appear.
+    /// </summary>
+    public bool SynchronizedOutput => _synchronizedOutput;
 
     /// <summary>
     /// A program is painting the whole screen itself, rather than printing
@@ -1104,7 +1113,7 @@ public sealed class TerminalEmulator : IVtHandler
                 case 1006: break; // SGR mouse encoding, accepted silently
                 case 2004: BracketedPaste = set; break;
                 case 2026:
-                    SynchronizedOutput = set;
+                    _synchronizedOutput = set;
                     if (set)
                         FullScreenPaint = true;
                     break;
@@ -1266,7 +1275,7 @@ public sealed class TerminalEmulator : IVtHandler
 
         // A reset must never leave the screen held: a program that died halfway
         // through a frame would otherwise freeze the terminal on its last one.
-        SynchronizedOutput = false;
+        _synchronizedOutput = false;
         FullScreenPaint = false;
         _mouseMode = 0;
         _g0 = 'B';

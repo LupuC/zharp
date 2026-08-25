@@ -456,10 +456,10 @@ public sealed class TerminalView : UserControl, IDisposable
         // would be showing a cleared screen, or half a redraw, which is what
         // flickering is made of. Keep the timer running so the frame lands as
         // soon as it closes.
-        var emulator = _session.Emulator;
-        bool holding;
-        lock (emulator.SyncRoot)
-            holding = emulator.SynchronizedOutput;
+        // Read without the lock. The pty thread holds SyncRoot for as long as
+        // it takes to parse a chunk, and blocking the UI thread on that once
+        // every frame is what made a keystroke take a second to appear.
+        bool holding = _session.Emulator.SynchronizedOutput;
 
         if (holding)
         {

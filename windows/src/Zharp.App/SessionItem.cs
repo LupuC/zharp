@@ -300,7 +300,15 @@ public sealed class SessionItem : INotifyPropertyChanged
 
     private void ApplyReport(AgentReport report)
     {
-        _reports = true;
+        // Only a report that could only have come from a running turn proves
+        // the agent narrates its whole life. Codex reports one thing, that it
+        // is blocked, because on Windows every hook it runs costs two
+        // processes; the rest of its status still has to be read off the
+        // screen, and switching that off after a single permission would leave
+        // the tab silent for the rest of the session.
+        if (report.Event is not (AgentEvent.Permission or AgentEvent.Idle or AgentEvent.Error))
+            _reports = true;
+
         _lastEvent = report.Event;
         _stateSince = DateTime.UtcNow;
 

@@ -44,13 +44,36 @@ public static class CodexIntegration
     /// </summary>
     private static readonly (string Event, string Kind, string? Matcher)[] Hooks =
     [
-        ("UserPromptSubmit", "prompt", null),
         ("PermissionRequest", "permission", null),
-        ("Stop", "done", null),
     ];
 
-    // Three hooks, each firing about once a turn, and that number is the whole
-    // design rather than a starting point.
+    // One hook, and only because there is no other way to know.
+    //
+    // Every hook invocation on Windows is two processes, cmd.exe and then node,
+    // because Codex has no argv form: there is only a command line, and it goes
+    // through a shell. You can watch them appear. Three hooks a turn was still
+    // two processes on every prompt, for status Zharp can work out on its own.
+    //
+    // What it cannot work out on its own is that the agent is blocked waiting
+    // for you, and that is the one thing worth a process. It fires only when
+    // Codex actually stops to ask, which is rare and is already a moment you
+    // are being interrupted.
+    //
+    // Everything else comes free:
+    //
+    //   running, and for how long - read off the screen, as it was before any
+    //   of this, which costs nothing because the output is already being parsed
+    //
+    //   the agent started - Zharp read the command that started it
+    //
+    //   the agent exited - the shell drawing its prompt again says so
+    //
+    //   the permission was answered - you typed, and Zharp is holding the
+    //   keyboard
+    //
+    // Claude Code is subscribed to far more, because its hooks take an argument
+    // list rather than a command line and so spawn no shell at all. The cost is
+    // the platform's, not the idea's.
     //
     // Codex has no argv form for a hook: there is only a command line, and on
     // Windows it goes through cmd.exe. So every hook invocation is two
