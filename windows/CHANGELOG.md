@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.1](https://github.com/LupuC/zharp/compare/windows-v0.19.0...windows-v0.19.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **windows:** stop diff line numbers piling onto the first row ([#24](https://github.com/LupuC/zharp/issues/24)) ([f71381a](https://github.com/LupuC/zharp/commit/f71381a4916a9a8fcd92f9e02ab85bcb09c48d92))
+
 ## [0.19.0](https://github.com/LupuC/zharp/compare/windows-v0.18.0...windows-v0.19.0) (2026-08-24)
 
 
