@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Graphics.Canvas.Text;
@@ -184,7 +185,26 @@ public sealed class TerminalView : UserControl, IDisposable
         // submitted, cleared when the shell draws its next prompt.
         _session.CommandExecuted += _ => _foregroundBusy = true;
         _session.PromptReturned += () => _foregroundBusy = false;
+
+        if (PerfEnabled)
+            _session.UserTyped += () => _keySentAt = Environment.TickCount64;
     }
+
+    // Latency, split at the only place it can usefully be split.
+    //
+    // A keystroke goes out to the program, the program decides what the screen
+    // should look like and sends it back, and only then is there anything for
+    // Zharp to draw. The first half is the program's and the second half is
+    // ours, and "typing feels slow" does not say which. Measuring them apart
+    // does, and stops the wrong half being optimised.
+    private long _keySentAt;
+    private long _dirtySince;
+    private int _echoCount;
+    private long _echoTotalMs;
+    private long _echoWorstMs;
+    private int _drawLagCount;
+    private long _drawLagTotalMs;
+    private long _drawLagWorstMs;
 
     /// <summary>
     /// True between a command being submitted and the shell prompting again.
@@ -237,13 +257,73 @@ public sealed class TerminalView : UserControl, IDisposable
         _session.OutputArrived -= OnOutputArrived;
         _blinkTimer?.Stop();
         _paintTimer?.Stop();
+        ClearLayoutCache();
         _canvas.RemoveFromVisualTree();
     }
 
     // ---------------------------------------------------------------- typography & layout
 
+    /// <summary>
+    /// Text layouts, keyed by the text and its style but NOT its colour.
+    ///
+    /// DrawText(string) builds a DirectWrite layout every time it is called:
+    /// shaping the text, measuring it, then throwing all of that away. That is
+    /// affordable for a run of thirty characters and ruinous for a run of one,
+    /// and a run ends at every colour change. Codex animates by giving each
+    /// letter of a word its own colour, so during its "Working" shimmer more
+    /// than two thirds of runs are a single character, and the whole screen was
+    /// being shaped from scratch sixty times a second.
+    ///
+    /// Colour is not part of a layout, it is an argument to drawing one. So the
+    /// same letter in eight shimmer colours is one cached layout used eight
+    /// times, and the pathological case becomes the cheapest one.
+    /// </summary>
+    private readonly Dictionary<(string Text, CellFlags Style), CanvasTextLayout> _layouts = new();
+
+    /// <summary>Long runs are usually unique, so caching them costs memory for
+    /// nothing. The runs worth keeping are the short repeated ones.</summary>
+    private const int MaxCachedRunLength = 16;
+    private const int MaxCachedLayouts = 2048;
+
+    private CanvasTextLayout? CachedLayout(string text, CellFlags style)
+    {
+        if (text.Length > MaxCachedRunLength)
+            return null;
+
+        var key = (text, style & (CellFlags.Bold | CellFlags.Italic));
+        if (_layouts.TryGetValue(key, out var found))
+            return found;
+
+        // Bounded, and cleared wholesale rather than evicted one at a time: it
+        // refills in a frame or two and the bookkeeping is not worth it.
+        if (_layouts.Count >= MaxCachedLayouts)
+            ClearLayoutCache();
+
+        try
+        {
+            var made = new CanvasTextLayout(_canvas, text, PickFormat(style), 0, 0);
+            _layouts[key] = made;
+            return made;
+        }
+        catch (Exception)
+        {
+            return null; // device lost or format gone; fall back to DrawText
+        }
+    }
+
+    private void ClearLayoutCache()
+    {
+        foreach (var layout in _layouts.Values)
+            layout.Dispose();
+        _layouts.Clear();
+    }
+
     private void RebuildTypography()
     {
+        // The formats below are about to be replaced, and every cached layout
+        // was built from one of them.
+        ClearLayoutCache();
+
         for (int i = 0; i < 4; i++)
         {
             _formats[i] = new CanvasTextFormat
@@ -423,6 +503,26 @@ public sealed class TerminalView : UserControl, IDisposable
     /// </summary>
     private void OnOutputArrived()
     {
+        if (PerfEnabled)
+        {
+            long now = Environment.TickCount64;
+
+            // The program answered the last keystroke. That round trip is its
+            // time, not ours.
+            long sent = Interlocked.Exchange(ref _keySentAt, 0);
+            if (sent != 0)
+            {
+                long took = now - sent;
+                _echoCount++;
+                _echoTotalMs += took;
+                _echoWorstMs = Math.Max(_echoWorstMs, took);
+            }
+
+            // And this is where our half starts: output in hand, nothing drawn.
+            if (!_dirty)
+                _dirtySince = now;
+        }
+
         _dirty = true;
         if (Interlocked.CompareExchange(ref _invalidatePending, 1, 0) == 0)
             DispatcherQueue.TryEnqueue(StartPainting);
@@ -482,13 +582,84 @@ public sealed class TerminalView : UserControl, IDisposable
             return;
         }
 
+        if (PerfEnabled && _dirtySince != 0)
+        {
+            long waited = Environment.TickCount64 - _dirtySince;
+            _dirtySince = 0;
+            _drawLagCount++;
+            _drawLagTotalMs += waited;
+            _drawLagWorstMs = Math.Max(_drawLagWorstMs, waited);
+        }
+
         _dirty = false;
         _canvas.Invalidate();
     }
 
     // ---------------------------------------------------------------- rendering
 
+    // Opt-in paint timing, via ZHARP_PERF=1. Set once, because reading the
+    // environment on a hot path is its own tax - which is a lesson this file
+    // has already paid for once.
+    private static readonly bool PerfEnabled =
+        Environment.GetEnvironmentVariable("ZHARP_PERF") == "1";
+
+    private readonly Stopwatch _paintWatch = new();
+    private int _paintCount;
+    private double _paintTotalMs;
+    private double _paintWorstMs;
+    private long _paintWindowStart;
+
+    /// <summary>
+    /// Reports how long painting actually takes, because the alternative is
+    /// guessing at it. Logs a line every 120 frames: how many, how long on
+    /// average, and the worst one, which is the number that gets felt.
+    /// </summary>
+    private void RecordPaint(double ms)
+    {
+        _paintCount++;
+        _paintTotalMs += ms;
+        _paintWorstMs = Math.Max(_paintWorstMs, ms);
+
+        if (_paintCount < 120)
+            return;
+
+        long now = Environment.TickCount64;
+        double seconds = _paintWindowStart == 0 ? 0 : (now - _paintWindowStart) / 1000.0;
+        _paintWindowStart = now;
+
+        App.Log($"paint: {_paintCount} frames in {seconds:F1}s " +
+                $"({(seconds > 0 ? _paintCount / seconds : 0):F0}/s), " +
+                $"avg {_paintTotalMs / _paintCount:F2}ms, worst {_paintWorstMs:F2}ms, " +
+                $"layouts cached {_layouts.Count}");
+
+        // The two halves of what "slow" means, side by side.
+        App.Log($"  key -> program answered : n={_echoCount} " +
+                $"avg {(_echoCount > 0 ? _echoTotalMs / (double)_echoCount : 0):F0}ms " +
+                $"worst {_echoWorstMs}ms");
+        App.Log($"  answer -> we drew it    : n={_drawLagCount} " +
+                $"avg {(_drawLagCount > 0 ? _drawLagTotalMs / (double)_drawLagCount : 0):F0}ms " +
+                $"worst {_drawLagWorstMs}ms");
+
+        _paintCount = 0;
+        _paintTotalMs = 0;
+        _paintWorstMs = 0;
+        _echoCount = 0; _echoTotalMs = 0; _echoWorstMs = 0;
+        _drawLagCount = 0; _drawLagTotalMs = 0; _drawLagWorstMs = 0;
+    }
+
     private void OnDraw(CanvasControl sender, CanvasDrawEventArgs args)
+    {
+        if (PerfEnabled)
+        {
+            _paintWatch.Restart();
+            try { DrawFrame(sender, args); }
+            finally { _paintWatch.Stop(); RecordPaint(_paintWatch.Elapsed.TotalMilliseconds); }
+            return;
+        }
+        DrawFrame(sender, args);
+    }
+
+    private void DrawFrame(CanvasControl sender, CanvasDrawEventArgs args)
     {
         var ds = args.DrawingSession;
         // Fully transparent surface: the chrome wash behind (same color as the
@@ -1050,7 +1221,14 @@ public sealed class TerminalView : UserControl, IDisposable
                 return;
             float x = PaddingPx + runStartCol * _cellWidth;
             if (runHasGlyphs)
-                session.DrawText(_runText.ToString(), x, y, FromRgb(runFg), PickFormat(runFlags));
+            {
+                string text = _runText.ToString();
+                var layout = CachedLayout(text, runFlags);
+                if (layout != null)
+                    session.DrawTextLayout(layout, x, y, FromRgb(runFg));
+                else
+                    session.DrawText(text, x, y, FromRgb(runFg), PickFormat(runFlags));
+            }
 
             float width = runCells * _cellWidth;
             var color = FromRgb(runFg);
