@@ -416,6 +416,182 @@ static Cell CellAt(TerminalEmulator e, int row, int col) =>
         $"cursor-disconnected B is not pending input (got '{e.PeekPendingCommand()}')");
 }
 
+// --- agent reports (OSC 777) ---------------------------------------------------
+
+{
+    var e = NewEmu();
+    string? payload = null;
+    e.AgentReported += body => payload = body;
+
+    Feed(e, "\x1b]777;notify;zharp://agent;{\"v\":1,\"event\":\"done\"}\x07");
+    Check(payload == "{\"v\":1,\"event\":\"done\"}", $"OSC 777 agent report (got '{payload}')");
+
+    // A JSON body is full of semicolons and colons; only the first two
+    // separators belong to the OSC framing.
+    payload = null;
+    Feed(e, "\x1b]777;notify;zharp://agent;{\"a\":\"x;y\",\"b\":\"z\"}\x07");
+    Check(payload == "{\"a\":\"x;y\",\"b\":\"z\"}", $"semicolons inside the body survive (got '{payload}')");
+
+    // Somebody else's notification travelling through the same pty.
+    payload = null;
+    Feed(e, "\x1b]777;notify;warp://cli-agent;{\"v\":1}\x07");
+    Check(payload == null, "another terminal's OSC 777 is ignored");
+
+    payload = null;
+    Feed(e, "\x1b]777;notify;zharp://agent\x07");
+    Feed(e, "\x1b]777;something-else;zharp://agent;{}\x07");
+    Check(payload == null, "malformed OSC 777 raises nothing");
+}
+
+// --- prompt return, which is how an exited agent is noticed --------------------
+
+{
+    var e = NewEmu(40, 6);
+    int returned = 0;
+    e.PromptReturned += () => returned++;
+
+    Feed(e, "\x1b]133;A\x07$ ");
+    Check(returned == 0, "the first prompt is not a return");
+
+    Feed(e, "\x1b]133;A\x07");
+    Check(returned == 0, "redrawing the same prompt is not a return");
+
+    // Run something, then the shell prompts again below it.
+    Feed(e, "claude\r\noutput\r\n\x1b]133;A\x07$ ");
+    Check(returned == 1, $"a fresh prompt below the last one is (got {returned})");
+
+    Feed(e, "\x1b]133;A\x07");
+    Check(returned == 1, $"and does not fire twice for it (got {returned})");
+
+    Feed(e, "\r\nmore\r\n\x1b]133;A\x07$ ");
+    Check(returned == 2, $"every later command reports too (got {returned})");
+}
+
+{
+    // A full screen program owns the alternate buffer, and the prompt marks it
+    // paints there are its own business.
+    var e = NewEmu(40, 6);
+    int returned = 0;
+    e.PromptReturned += () => returned++;
+    Feed(e, "\x1b]133;A\x07$ ");
+    Feed(e, "\x1b[?1049h");
+    Feed(e, "\r\n\x1b]133;A\x07\r\n\x1b]133;A\x07");
+    Feed(e, "\x1b[?1049l");
+    Check(returned == 0, $"alt buffer prompt marks are not returns (got {returned})");
+}
+
+// --- alternate screen restore, which is how a TUI leaves no mess behind -------
+
+{
+    var e = NewEmu(20, 5);
+    Feed(e, "shell line one\r\nshell line two");
+
+    // A full screen program takes the alternate buffer and paints over it.
+    Feed(e, "\x1b[?1049h");
+    Feed(e, "\x1b[2J\x1b[H");
+    Feed(e, "TUI FRAME\r\nbox border here");
+    Check(RowText(e, 0) == "TUI FRAME", "alt buffer shows the program");
+
+    // Leaving it must put back exactly what was underneath.
+    Feed(e, "\x1b[?1049l");
+    Check(RowText(e, 0) == "shell line one", $"alt exit restores row 0 (got '{RowText(e, 0)}')");
+    Check(RowText(e, 1) == "shell line two", $"alt exit restores row 1 (got '{RowText(e, 1)}')");
+    Check(!e.IsAlternateBuffer, "alt exit leaves the main buffer active");
+}
+
+{
+    // A program that paints inline, with no alternate buffer at all, is
+    // entitled to leave its last frame on screen: that is scrollback, and the
+    // shell simply prompts underneath it.
+    var e = NewEmu(20, 5);
+    Feed(e, "\x1b]133;A\x07$ ");
+    Feed(e, "codex\r\n");
+    Feed(e, "box border here\r\n");
+    Feed(e, "\x1b]133;A\x07$ ");
+    Check(RowText(e, 1) == "box border here", $"inline TUI output stays in scrollback (got '{RowText(e, 1)}')");
+    Check(RowText(e, 2) == "$", $"and the shell prompts underneath it (got '{RowText(e, 2)}')");
+}
+
+// --- synchronized output (mode 2026), which is what stops the flicker --------
+
+{
+    var e = NewEmu();
+    Check(!e.SynchronizedOutput, "not holding by default");
+
+    Feed(e, "\x1b[?2026h");
+    Check(e.SynchronizedOutput, "2026h holds the frame");
+
+    Feed(e, "\x1b[?2026l");
+    Check(!e.SynchronizedOutput, "2026l releases it");
+
+    // A program that dies mid frame must not leave the screen held forever.
+    //  rather than \x1b: a C# \x escape eats as many hex digits as it
+    // can find, so "\x1bc" is the single character U+01BC, not ESC then c.
+    Feed(e, "\x1b[?2026h");
+    Feed(e, "c");
+    Check(!e.SynchronizedOutput, "a full reset releases it");
+}
+
+{
+    // DECRQM. A program asks before it uses a mode, and silence reads as no,
+    // so answering is what makes the mode above worth having.
+    var e = NewEmu();
+    string reply = "";
+    e.ResponseRequested += r => reply += r;
+
+    Feed(e, "\x1b[?2026$p");
+    Check(reply == "\x1b[?2026;2$y", $"DECRQM: 2026 supported, currently reset (got '{Vis(reply)}')");
+
+    reply = "";
+    Feed(e, "\x1b[?2026h\x1b[?2026$p");
+    Check(reply == "\x1b[?2026;1$y", $"DECRQM: reports it as set (got '{Vis(reply)}')");
+    Feed(e, "\x1b[?2026l");
+
+    reply = "";
+    Feed(e, "\x1b[?9999$p");
+    Check(reply == "\x1b[?9999;0$y", $"DECRQM: unknown mode is not recognized (got '{Vis(reply)}')");
+
+    reply = "";
+    Feed(e, "\x1b[?2004h\x1b[?2004$p");
+    Check(reply == "\x1b[?2004;1$y", $"DECRQM: bracketed paste reports set (got '{Vis(reply)}')");
+
+    // DECRQM must not be mistaken for anything else that ends in p.
+    reply = "";
+    Feed(e, "\x1b[?25$p");
+    Check(reply == "\x1b[?25;1$y", $"DECRQM: cursor visible reports set (got '{Vis(reply)}')");
+}
+
+static string Vis(string s) => s.Replace("\x1b", "<ESC>");
+
+// --- full screen paint, which decides blocks versus plain rows ----------------
+
+{
+    var e = NewEmu(40, 10);
+    Check(!e.FullScreenPaint, "a plain shell is not painting the screen");
+
+    Feed(e, "\x1b]133;A\x07$ ");
+    Feed(e, "ls\r\nfile-one\r\n");
+    Feed(e, "\x1b]133;A\x07$ ");
+    Check(!e.FullScreenPaint, "ordinary command output is not either");
+
+    // A program that draws frames says so by asking for them to be presented
+    // whole, and no shell ever does.
+    Feed(e, "codex\r\n");
+    Feed(e, "\x1b[?2026h");
+    Feed(e, "\x1b[5;1Hmenu row");
+    Feed(e, "\x1b[?2026l");
+    Check(e.FullScreenPaint, "synchronized frames mark a full screen program");
+
+    // It has to stay set between frames, or the layout would flip back and
+    // forth on every repaint.
+    Feed(e, "\x1b[6;1Hanother row");
+    Check(e.FullScreenPaint, "and stays set between its frames");
+
+    // The shell getting its prompt back means the program is gone.
+    Feed(e, "\r\n\x1b]133;A\x07$ ");
+    Check(!e.FullScreenPaint, "a returned prompt clears it");
+}
+
 Console.WriteLine();
 Console.WriteLine(failures == 0
     ? $"All {passed} checks passed."

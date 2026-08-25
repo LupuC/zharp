@@ -24,6 +24,7 @@ public sealed partial class SettingsView : UserControl
         _settings = settings;
         InitializeComponent();
 
+        // About stays last: ShowAbout() selects by the end of this list.
         _pages = [AppearancePage, TerminalPage, ShellPage, ShortcutsPage, AboutPage];
         LoadValues();
         NavRail.SelectedIndex = 0;
@@ -49,6 +50,7 @@ public sealed partial class SettingsView : UserControl
         TitleModeCombo.SelectedIndex = _settings.SidebarTitleIsCwd ? 1 : 0;
         ShowPathToggle.IsOn = _settings.SidebarShowPath;
         ShowSearchToggle.IsOn = _settings.SidebarShowSearch;
+        AgentAlertToggle.IsOn = _settings.AgentNotifications;
         BuildShortcutRows();
 
         var familyNames = CanvasTextFormat.GetSystemFontFamilies()
@@ -192,6 +194,13 @@ public sealed partial class SettingsView : UserControl
         int index = NavRail.SelectedIndex;
         for (int i = 0; i < _pages.Length; i++)
             _pages[i].Visibility = i == index ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnAgentAlertToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        _settings.AgentNotifications = AgentAlertToggle.IsOn;
+        Commit();
     }
 
     // ---------------------------------------------------------------- handlers

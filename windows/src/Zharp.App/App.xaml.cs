@@ -90,15 +90,49 @@ public partial class App : Application
         {
             // Toast support for the update notifier. Subscribe before Register
             // so clicks land even for toasts shown earlier this session.
-            AppNotificationManager.Default.NotificationInvoked += (_, _) =>
-                (Main as MainWindow)?.DispatcherQueue.TryEnqueue(
-                    () => (Main as MainWindow)?.ShowUpdatePage());
+            AppNotificationManager.Default.NotificationInvoked += (_, e) =>
+            {
+                // Zharp raises more than one kind of notification now, so the
+                // click has to be routed. Untagged means the update toast,
+                // which is the only one that predates the argument.
+                e.Arguments.TryGetValue("action", out string? action);
+                e.Arguments.TryGetValue("session", out string? session);
+
+                (Main as MainWindow)?.DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (action == "agent" && int.TryParse(session, out int id))
+                        MainWindow.ShowAgentSession(id);
+                    else
+                        (Main as MainWindow)?.ShowUpdatePage();
+                });
+            };
             AppNotificationManager.Default.Register();
         }
         catch (Exception ex)
         {
             Log("Notification registration failed: " + ex);
         }
+
+        // Reports from agents that cannot write to a terminal arrive here.
+        // Started before any session exists, so nothing can be missed.
+        AgentSpool.Start();
+
+        // Off the launch path: these read and may rewrite files on disk, and
+        // nothing on screen is waiting for the answer. New sessions pick the
+        // hooks up whenever it lands.
+        Task.Run(() =>
+        {
+            ClaudeCodeIntegration.Sync(Settings.AgentIntegration);
+
+            // Codex will not run a hook it has not been told to trust, so a
+            // fresh install owes the user an explanation. Recorded rather than
+            // acted on here: the place to say it is a terminal, and there is
+            // not one yet.
+            if (CodexIntegration.Sync(Settings.AgentIntegration))
+                Settings.CodexNoticeFor = "";
+
+            OpenCodeIntegration.Sync(Settings.AgentIntegration);
+        });
 
         _window = new MainWindow();
         Main = _window;

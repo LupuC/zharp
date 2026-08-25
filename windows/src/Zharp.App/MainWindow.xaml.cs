@@ -363,6 +363,8 @@ public sealed partial class MainWindow : Window
             OverrideNoColor = _settings.OverrideNoColor,
             ExtraEnvironment = shell.ExtraEnvironment,
         };
+        ShowCodexTrustNotice(session);
+
         var view = new TerminalView(session, _settings.FontSize, _settings.FontFamily)
         {
             DefaultCursorStyleCode = AppSettings.CursorStyleToCode(_settings.CursorStyle),
@@ -385,12 +387,190 @@ public sealed partial class MainWindow : Window
 
         session.CommandExecuted += cmd =>
             HistoryStore.Instance.Add(cmd, session.WorkingDirectory, shell.DisplayName);
+
+        // Both of these resolve the owning window when they fire rather than
+        // closing over this one. A tab can be dragged into another window with
+        // its shell still running, and the badge, the taskbar and the changes
+        // panel all belong to whichever window is holding it at the time.
+        item.AttentionChanged += owner =>
+            OwnerOf(owner)?.OnSessionAttentionChanged(owner);
+
+        // The agent says which file it just wrote; the panel is what shows it.
+        item.AgentTouchedFile += (owner, path) =>
+            OwnerOf(owner)?.FollowAgentEdit(owner, path);
+
         HookSessionToWindow(item);
 
         _sessions.Add(item);
         RefreshVisibleSessions();
         ActivateSession(item);
     }
+
+    /// <summary>
+    /// Explains, once, that Codex is about to ask whether to trust the hooks
+    /// Zharp just wrote.
+    ///
+    /// Codex will not run a hook it has not been told to trust, and that is a
+    /// good rule, exactly because a program writing hooks into your agent is
+    /// the case it guards. Zharp does not try to route around it. But a Codex
+    /// tab that reports nothing looks broken rather than unapproved, so the
+    /// user is told what to expect.
+    ///
+    /// Written into the emulator before the shell starts, while the screen is
+    /// still empty. Feeding it later would land in the middle of a prompt line
+    /// and corrupt it.
+    /// </summary>
+    private void ShowCodexTrustNotice(TerminalSession session)
+    {
+        if (!_settings.AgentIntegration)
+            return;
+        if (_settings.CodexNoticeFor == CodexIntegration.ScriptPath)
+            return;
+        if (!CodexIntegration.IsConnected())
+            return;
+
+        session.Emulator.Feed(System.Text.Encoding.UTF8.GetBytes(
+            "\x1b[2mZharp installed status hooks for Codex. "
+            + "Codex will ask you to trust them the next time it starts.\x1b[0m\r\n"));
+
+        _settings.CodexNoticeFor = CodexIntegration.ScriptPath;
+        _settings.Save();
+    }
+
+    /// <summary>Whichever window is currently holding this tab.</summary>
+    private static MainWindow? OwnerOf(SessionItem item) =>
+        App.Windows.FirstOrDefault(w => w._sessions.Contains(item));
+
+    /// <summary>
+    /// Opens the file the agent just wrote, when this tab is the one on screen
+    /// and its changes panel is open. Following a file in a tab you cannot see
+    /// would move the panel out from under whatever you are actually reading.
+    /// </summary>
+    private void FollowAgentEdit(SessionItem item, string path)
+    {
+        if (!ReferenceEquals(_active, item) || _diffView == null)
+            return;
+        if (DiffPanel.Visibility != Visibility.Visible)
+            return;
+        _ = _diffView.FollowAsync(path);
+    }
+
+    /// <summary>
+    /// An agent in one of this window's tabs has become blocked on the user.
+    ///
+    /// The tab card carries a badge for itself. This is about the case the
+    /// badge cannot cover: the tab is not the one on screen, or Zharp is not
+    /// the window you are looking at. Then it is worth saying so out loud,
+    /// because the whole point of running several agents is not watching them.
+    /// </summary>
+    private void OnSessionAttentionChanged(SessionItem item)
+    {
+        if (!item.NeedsAttention)
+            return;
+
+        // Already in front of them. The status line says the rest.
+        bool visible = ReferenceEquals(_active, item) && IsForeground();
+        if (visible)
+        {
+            item.MarkSeen();
+            return;
+        }
+
+        // The tab always carries its badge. This is only about reaching you
+        // somewhere else, which is exactly the part worth being able to switch
+        // off, so it is the only part the setting governs.
+        if (!_settings.AgentNotifications)
+            return;
+
+        FlashTaskbar();
+
+        try
+        {
+            var toast = new Microsoft.Windows.AppNotifications.Builder.AppNotificationBuilder()
+                .AddText($"{item.SessionName} needs you")
+                .AddText($"{item.DisplaySubtitle} - {item.Subtitle}")
+                // Tagged so the click lands on this session. Without it every
+                // notification Zharp raises went to the same handler, and an
+                // agent asking a question opened the update page.
+                .AddArgument("action", "agent")
+                .AddArgument("session", item.Id.ToString())
+                .BuildNotification();
+            Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(toast);
+            App.Log($"agent toast: {item.SessionName} - {item.DisplaySubtitle}");
+        }
+        catch (Exception ex)
+        {
+            // A toast is a courtesy. The badge and the taskbar already said it.
+            App.Log($"agent toast failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Brings up the session a notification was raised for. The tab may have
+    /// been dragged to another window, or closed outright, since the toast was
+    /// shown, so the session is looked up rather than remembered.
+    /// </summary>
+    internal static void ShowAgentSession(int id)
+    {
+        foreach (var window in App.Windows.ToList())
+        {
+            var item = window._sessions.FirstOrDefault(s => s.Id == id);
+            if (item == null)
+                continue;
+            window.Activate();
+            window.ActivateSession(item);
+            return;
+        }
+    }
+
+    private bool IsForeground() =>
+        GetForegroundWindow() == WinRT.Interop.WindowNative.GetWindowHandle(this);
+
+    /// <summary>
+    /// The conventional Windows "over here" - the taskbar button flashes until
+    /// the window is brought forward, and stays highlighted after it stops.
+    /// Deliberately not a window that steals focus: the user is in the middle
+    /// of something, and an agent waiting is not an emergency.
+    /// </summary>
+    private void FlashTaskbar()
+    {
+        try
+        {
+            var info = new FLASHWINFO
+            {
+                cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<FLASHWINFO>(),
+                hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this),
+                dwFlags = FLASHW_TRAY | FLASHW_TIMERNOFG,
+                uCount = 3,
+                dwTimeout = 0,
+            };
+            FlashWindowEx(ref info);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"agent flash: {ex.Message}");
+        }
+    }
+
+    private const uint FLASHW_TRAY = 0x00000002;
+    private const uint FLASHW_TIMERNOFG = 0x0000000C;
+
+    [System.Runtime.InteropServices.StructLayout(
+        System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct FLASHWINFO
+    {
+        public uint cbSize;
+        public IntPtr hwnd;
+        public uint dwFlags;
+        public uint uCount;
+        public uint dwTimeout;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
 
     /// <summary>Points the session's window-scoped wiring at THIS window. A tab
     /// carries its shell between windows, so the handler that closes the tab on
@@ -544,6 +724,7 @@ public sealed partial class MainWindow : Window
         }
         else
         {
+            item.StopAgentClock();
             item.View!.Dispose();
             item.Session!.Dispose();
         }
@@ -592,6 +773,10 @@ public sealed partial class MainWindow : Window
     private void ActivateSession(SessionItem item)
     {
         _active = item;
+
+        // Looking at the tab is what clears its badge. Whatever the agent
+        // wants is now on screen in front of you.
+        item.MarkSeen();
 
         // Every transition is focus-first, remove-after: if the focused element
         // leaves the tree first, XAML bounces focus to the first tab stop (the
@@ -967,6 +1152,12 @@ public sealed partial class MainWindow : Window
                 _diffView = new DiffView();
                 _diffView.SetPalette(_terminalPalette);
                 _diffView.SetFontFamily(_settings.FontFamily);
+                _diffView.SetFileListHeight(_settings.DiffFileListHeight);
+                _diffView.FileListHeightChanged += height =>
+                {
+                    _settings.DiffFileListHeight = height;
+                    _settings.Save();
+                };
                 DiffPanel.Children.Add(_diffView);
                 _diffView.Loaded += (_, _) => _diffView!.SetUiZoom(_settings.UiZoom);
             }
@@ -1286,9 +1477,11 @@ public sealed partial class MainWindow : Window
         OnboardingOverlay.RequestedTheme = Root.RequestedTheme;
 
         _terminalPalette = spec.CreatePalette();
+        SessionItem.IsDarkTheme = spec.IsDark;
         foreach (var item in _sessions)
         {
             item.View?.SetPalette(_terminalPalette);
+            item.ThemeChanged();
         }
         _diffView?.SetPalette(_terminalPalette);
         _diffView?.SetFontFamily(_settings.FontFamily);

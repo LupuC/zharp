@@ -23,6 +23,11 @@
     <Content Include="Assets\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- Hook scripts the AI agents run. They have to sit next to the exe,
+         because the path Zharp writes into an agent's config points here. -->
+    <Content Include="Integrations\**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

@@ -21,6 +21,16 @@ public sealed class TerminalSession : IDisposable
     public TerminalEmulator Emulator { get; }
     public string Title { get; private set; }
 
+    /// <summary>
+    /// Identifies this session to anything running inside it.
+    ///
+    /// Zharp puts it in the shell's environment, so an agent's hook inherits it
+    /// and can name the tab it belongs to when it has no other way to say.
+    /// That is what lets two agents in the same repository report separately,
+    /// which matching on the working directory cannot do.
+    /// </summary>
+    public string SessionKey { get; } = Guid.NewGuid().ToString("N");
+
     /// <summary>Shell-reported current directory; falls back to the start directory.</summary>
     public string? WorkingDirectory { get; private set; }
     public bool IsStarted => _pty != null;
@@ -38,6 +48,24 @@ public sealed class TerminalSession : IDisposable
     public event Action<string>? CommandExecuted;
     public event Action<int>? Exited;
     public event Action? Bell;
+
+    /// <summary>An AI agent running in this session reporting its own state.
+    /// Raised on the pty thread with the raw JSON body.</summary>
+    public event Action<string>? AgentReported;
+
+    /// <summary>The shell is back at a fresh prompt, so whatever was running in
+    /// the foreground has exited.</summary>
+    public event Action? PromptReturned;
+
+    /// <summary>
+    /// The user sent input to this session.
+    ///
+    /// Worth an event because of what it means when an agent is waiting: they
+    /// have answered it. No agent emits "that permission was resolved", and
+    /// subscribing to every tool call to infer it costs a process per call.
+    /// Zharp is the one holding the keyboard, so it already knows.
+    /// </summary>
+    public event Action? UserTyped;
 
     public TerminalSession(string commandLine, string? workingDirectory, string initialTitle,
         int scrollbackLines = 10000)
@@ -60,6 +88,8 @@ public sealed class TerminalSession : IDisposable
         Emulator.ResponseRequested += WriteRaw;
         Emulator.CommandExecuted += cmd => CommandExecuted?.Invoke(cmd);
         Emulator.BellRang += () => Bell?.Invoke();
+        Emulator.AgentReported += payload => AgentReported?.Invoke(payload);
+        Emulator.PromptReturned += () => PromptReturned?.Invoke();
     }
 
     public void EnsureStarted(int cols, int rows)
@@ -72,8 +102,20 @@ public sealed class TerminalSession : IDisposable
         var env = new Dictionary<string, string?>
         {
             ["TERM_PROGRAM"] = "Zharp",
-            ["TERM_PROGRAM_VERSION"] = "0.1.0",
+            ["TERM_PROGRAM_VERSION"] = UpdateService.CurrentVersion.ToString(),
             ["COLORTERM"] = "truecolor",
+
+            // The version of the agent-report protocol this build understands.
+            // Agent hooks check for it and stay silent when it is absent, so the
+            // same hook can be installed once and cost nothing in any other
+            // terminal. Bump it only for a change old Zharps cannot read.
+            ["ZHARP_AGENT_PROTOCOL"] = "1",
+
+            // Which tab this shell is. Only agents that report through the
+            // spool need it, but every session gets one: which agent somebody
+            // runs is not knowable when the shell starts.
+            ["ZHARP_SESSION"] = SessionKey,
+            ["ZHARP_SPOOL"] = AgentSpool.Directory,
 
             // Strip session markers Zharp may have inherited from its own parent
             // (e.g. when launched from inside a Claude Code session). Leaking them
@@ -111,6 +153,19 @@ public sealed class TerminalSession : IDisposable
     {
         var pty = _pty!;
         var buffer = new byte[65536];
+
+        // Opened once, if at all. This used to read the environment and open,
+        // append to and close a file on every single read, on the thread every
+        // keystroke has to come back through. A program mid animation sends a
+        // chunk per letter, so recording a session made the terminal feel
+        // exactly as slow as it was.
+        FileStream? dump = null;
+        if (Environment.GetEnvironmentVariable("ZHARP_DUMP_PTY") is { Length: > 0 } path)
+        {
+            try { dump = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read); }
+            catch { }
+        }
+
         try
         {
             while (!_disposed)
@@ -118,9 +173,9 @@ public sealed class TerminalSession : IDisposable
                 int read = pty.Output.Read(buffer, 0, buffer.Length);
                 if (read <= 0)
                     break;
-                if (Environment.GetEnvironmentVariable("ZHARP_DUMP_PTY") is { Length: > 0 } dump)
+                if (dump != null)
                 {
-                    try { using var fs = new FileStream(dump, FileMode.Append); fs.Write(buffer, 0, read); }
+                    try { dump.Write(buffer, 0, read); dump.Flush(); }
                     catch { }
                 }
                 Emulator.Feed(buffer.AsSpan(0, read));
@@ -136,6 +191,10 @@ public sealed class TerminalSession : IDisposable
         }
         catch (ObjectDisposedException)
         {
+        }
+        finally
+        {
+            dump?.Dispose();
         }
     }
 
@@ -159,6 +218,7 @@ public sealed class TerminalSession : IDisposable
             if (pending != null)
                 CommandExecuted(pending);
         }
+        UserTyped?.Invoke();
         WriteRaw(text);
     }
 

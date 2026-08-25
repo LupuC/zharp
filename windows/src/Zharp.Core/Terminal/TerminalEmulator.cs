@@ -109,13 +109,27 @@ public sealed class TerminalEmulator : IVtHandler
     /// mark to the end of its soft-wrap chain). Not raised for empty prompts.</summary>
     public event Action<string>? CommandExecuted;
 
+    /// <summary>
+    /// The shell has drawn a fresh prompt below the last one, so whatever was
+    /// running in the foreground has exited.
+    ///
+    /// This is the only completely reliable way to know an agent is gone. An
+    /// agent's own "session ended" hook fires while its process is tearing
+    /// itself down, which is the worst possible moment to be asking it to write
+    /// to the terminal, and a report that never arrives leaves a tab claiming
+    /// to be busy forever. A prompt coming back cannot be missed.
+    /// </summary>
+    public event Action? PromptReturned;
+
     private void RecordPromptMark()
     {
         long raw = _main.DroppedLines + _main.ScrollbackCount + CursorY;
 
         // A genuinely NEW prompt below the last one means the previous block
         // just finished - report the command that ran in it.
-        if (_promptMarksRaw.Count > 0 && raw > _promptMarksRaw[^1] && CommandExecuted != null)
+        bool freshPrompt = _promptMarksRaw.Count > 0 && raw > _promptMarksRaw[^1];
+
+        if (freshPrompt && CommandExecuted != null)
         {
             long prevMark = _promptMarksRaw[^1];
             for (int i = _promptEndMarksRaw.Count - 1; i >= 0; i--)
@@ -140,6 +154,15 @@ public sealed class TerminalEmulator : IVtHandler
         _promptMarksRaw.Add(raw);
         if (_promptMarksRaw.Count > 256)
             _promptMarksRaw.RemoveAt(0);
+
+        // After the bookkeeping, so anyone listening sees settled state.
+        if (freshPrompt)
+        {
+            // The shell is back, so whatever was painting the screen is gone
+            // and its output is history again.
+            FullScreenPaint = false;
+            PromptReturned?.Invoke();
+        }
     }
 
     /// <summary>True when the live prompt has a valid prompt-end mark - i.e.
@@ -437,7 +460,40 @@ public sealed class TerminalEmulator : IVtHandler
                 else if (arg.StartsWith("B", StringComparison.OrdinalIgnoreCase))
                     RecordPromptEnd();
                 break;
+            case 777:
+                // OSC 777;notify;<title>;<body> - the rxvt-unicode notification
+                // convention, which the AI coding agents have settled on for
+                // talking to their terminal. Only our own title is claimed;
+                // another program's notification is its business, not ours.
+                HandleNotify(arg);
+                break;
         }
+    }
+
+    /// <summary>The OSC 777 title an agent uses to address Zharp specifically.</summary>
+    private const string AgentNotifyTitle = "zharp://agent";
+
+    /// <summary>
+    /// An AI agent reporting its own state, as the raw JSON body of the
+    /// notification. Zharp used to work this out by reading the screen, which
+    /// could see that an agent was busy but never that it was waiting on you.
+    /// </summary>
+    public event Action<string>? AgentReported;
+
+    private void HandleNotify(string arg)
+    {
+        const string Verb = "notify;";
+        if (!arg.StartsWith(Verb, StringComparison.Ordinal))
+            return;
+
+        string rest = arg[Verb.Length..];
+        int sep = rest.IndexOf(';');
+        if (sep < 0)
+            return;
+        if (!rest.AsSpan(0, sep).Equals(AgentNotifyTitle, StringComparison.Ordinal))
+            return;
+
+        AgentReported?.Invoke(rest[(sep + 1)..]);
     }
 
     private void SetWorkingDirectory(string? path)
@@ -479,6 +535,8 @@ public sealed class TerminalEmulator : IVtHandler
         {
             if (intermediates == " " && final == 'q') // DECSCUSR
                 CursorStyle = P(0);
+            else if (intermediates == "$" && final == 'p') // DECRQM
+                ReportMode(prefix, P(0));
             return;
         }
 
@@ -937,6 +995,76 @@ public sealed class TerminalEmulator : IVtHandler
         }
     }
 
+    /// <summary>
+    /// DEC mode 2026, synchronized output: the program is painting a frame and
+    /// does not want it shown half finished.
+    ///
+    /// Full screen programs redraw the whole screen for every keystroke, and
+    /// without this the terminal happily shows the cleared screen before the
+    /// repaint lands. That is what flickering is. Zharp holds the last complete
+    /// frame until the program says it is done.
+    /// </summary>
+    private volatile bool _synchronizedOutput;
+
+    /// <summary>
+    /// Readable without taking <see cref="SyncRoot"/>, deliberately. The UI
+    /// thread checks this before every paint, and the pty thread holds the lock
+    /// for as long as it takes to parse a chunk. Taking the lock here meant the
+    /// interface stalled whenever a chatty program sent a big one, which looks
+    /// exactly like a keystroke taking a second to appear.
+    /// </summary>
+    public bool SynchronizedOutput => _synchronizedOutput;
+
+    /// <summary>
+    /// A program is painting the whole screen itself, rather than printing
+    /// output a line at a time the way a command does.
+    ///
+    /// This matters because Zharp lays prompt-marked output out as command
+    /// blocks, which is right for the output of a command and wrong for a
+    /// program that decides what goes on every row. Most full screen programs
+    /// take the alternate buffer and are obvious; the agent CLIs paint in the
+    /// main buffer, so the marks from the last real prompt are still sitting
+    /// there and the block layout swallowed the whole interface.
+    ///
+    /// Synchronized output is the tell. A program only asks for its frames to
+    /// be presented whole if it is drawing frames, and no shell does it. Stays
+    /// set for as long as the program runs, and is cleared by the shell getting
+    /// its prompt back.
+    /// </summary>
+    public bool FullScreenPaint { get; private set; }
+
+    /// <summary>
+    /// Answers DECRQM, "is this mode supported, and is it on".
+    ///
+    /// This matters more than it looks: a program asks before it uses a mode,
+    /// and silence reads as no. Supporting synchronized output without
+    /// answering this would have left every program still flickering, because
+    /// none of them would ever have turned it on.
+    ///
+    /// Reply values are the DEC ones: 0 not recognized, 1 set, 2 reset.
+    /// </summary>
+    private void ReportMode(char prefix, int mode)
+    {
+        if (prefix != '?')
+        {
+            // ANSI modes. None are implemented, and saying so plainly is
+            // better than staying silent, which reads as a dead terminal.
+            Respond($"\x1b[{mode};0$y");
+            return;
+        }
+
+        int state = mode switch
+        {
+            2026 => SynchronizedOutput ? 1 : 2,
+            1049 => IsAlternateBuffer ? 1 : 2,
+            2004 => BracketedPaste ? 1 : 2,
+            25 => CursorVisible ? 1 : 2,
+            7 => _autoWrap ? 1 : 2,
+            _ => 0,
+        };
+        Respond($"\x1b[?{mode};{state}$y");
+    }
+
     private void SetPrivateModes(IReadOnlyList<int[]> parameters, bool set)
     {
         foreach (var group in parameters)
@@ -984,6 +1112,11 @@ public sealed class TerminalEmulator : IVtHandler
                 case 1004: FocusEvents = set; break;
                 case 1006: break; // SGR mouse encoding, accepted silently
                 case 2004: BracketedPaste = set; break;
+                case 2026:
+                    _synchronizedOutput = set;
+                    if (set)
+                        FullScreenPaint = true;
+                    break;
             }
         }
     }
@@ -1139,6 +1272,11 @@ public sealed class TerminalEmulator : IVtHandler
         ApplicationKeypad = false;
         BracketedPaste = false;
         FocusEvents = false;
+
+        // A reset must never leave the screen held: a program that died halfway
+        // through a frame would otherwise freeze the terminal on its last one.
+        _synchronizedOutput = false;
+        FullScreenPaint = false;
         _mouseMode = 0;
         _g0 = 'B';
         _g1 = 'B';
