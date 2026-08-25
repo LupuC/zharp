@@ -153,11 +153,15 @@ public static class ClaudeCodeIntegration
             if (Read() is not { } root || root["hooks"] is not JsonObject hooks)
                 return false;
 
-            foreach (var (name, kind, _) in Hooks)
+            // Compared against what Connect would write, in full, rather than
+            // against the parts that seemed to matter. Anything we change
+            // later - a timeout, a matcher, a new event - then repairs itself
+            // on the next launch instead of needing to be remembered here.
+            foreach (var (name, kind, matcher) in Hooks)
             {
-                if (hooks[name] is not JsonArray groups)
-                    return false;
-                if (!groups.Any(g => RunsExactly(g, kind)))
+                var want = Group(kind, matcher);
+                if (hooks[name] is not JsonArray groups
+                    || !groups.Any(g => JsonNode.DeepEquals(g, want)))
                     return false;
             }
             return true;
@@ -167,26 +171,6 @@ public static class ClaudeCodeIntegration
             App.Log($"claude code: could not read settings: {ex.Message}");
             return false;
         }
-    }
-
-    /// <summary>This exact script, at this exact path, for this exact event.</summary>
-    private static bool RunsExactly(JsonNode? group, string kind)
-    {
-        if (group is not JsonObject obj || obj["hooks"] is not JsonArray hooks)
-            return false;
-
-        foreach (var hook in hooks)
-        {
-            if (hook is not JsonObject h || h["args"] is not JsonArray args)
-                continue;
-
-            var values = args.Select(a => a?.GetValue<string>()).ToList();
-            int at = values.FindIndex(v =>
-                string.Equals(v, ScriptPath, StringComparison.OrdinalIgnoreCase));
-            if (at >= 0 && at + 1 < values.Count && values[at + 1] == kind)
-                return true;
-        }
-        return false;
     }
 
     /// <summary>

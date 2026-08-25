@@ -22,10 +22,20 @@ namespace Zharp.App;
 /// </summary>
 public static class AgentSpool
 {
-    /// <summary>Where hooks drop their reports.</summary>
-    public static string Directory { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Zharp", "agents");
+    /// <summary>
+    /// Where hooks drop their reports.
+    ///
+    /// ZHARP_SPOOL_DIR redirects it, which is how this gets exercised without
+    /// fighting a running Zharp: two watchers on one directory race for every
+    /// report, and whichever reads first deletes it. Same idea as
+    /// ZHARP_DUMP_PTY.
+    /// </summary>
+    public static string Directory { get; } =
+        Environment.GetEnvironmentVariable("ZHARP_SPOOL_DIR") is { Length: > 0 } custom
+            ? custom
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Zharp", "agents");
 
     /// <summary>A report arrived, with the session key that identifies its tab.</summary>
     public static event Action<string, AgentReport>? Reported;

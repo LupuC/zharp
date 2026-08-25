@@ -27,7 +27,21 @@ namespace Zharp.App;
 /// </summary>
 public static class CodexIntegration
 {
-    /// <summary>Which Codex event feeds which Zharp report.</summary>
+    /// <summary>
+    /// How long a hook may take. Never worth stalling a turn for status, and
+    /// the script is a node start and a small write, so this is already
+    /// generous. Codex would otherwise default to 600 seconds.
+    /// </summary>
+    private const int Timeout = 3;
+
+    /// <summary>
+    /// Which Codex event feeds which Zharp report.
+    ///
+    /// Every timeout is <see cref="Timeout"/> rather than something larger,
+    /// because Codex caps SessionEnd hooks at three seconds and prints a
+    /// warning into the session when it has to clamp one. Asking for more than
+    /// we need bought nothing and put a complaint on the user's screen.
+    /// </summary>
     private static readonly (string Event, string Kind, string? Matcher)[] Hooks =
     [
         ("SessionStart", "start", null),
@@ -101,9 +115,15 @@ public static class CodexIntegration
             if (Read() is not { } root || root["hooks"] is not JsonObject hooks)
                 return false;
 
-            foreach (var (name, kind, _) in Hooks)
+            // Compared against what Connect would write, in full, rather than
+            // against the parts that seemed to matter. Anything we change
+            // later - a timeout, a matcher, a new event - then repairs itself
+            // on the next launch instead of needing to be remembered here.
+            foreach (var (name, kind, matcher) in Hooks)
             {
-                if (hooks[name] is not JsonArray groups || !groups.Any(g => RunsExactly(g, kind)))
+                var want = Group(kind, matcher);
+                if (hooks[name] is not JsonArray groups
+                    || !groups.Any(g => JsonNode.DeepEquals(g, want)))
                     return false;
             }
             return true;
@@ -223,9 +243,7 @@ public static class CodexIntegration
             ["type"] = "command",
             ["command"] = command,
             ["commandWindows"] = command,
-
-            // Status is never worth stalling a turn for. Codex defaults to 600.
-            ["timeout"] = 5,
+            ["timeout"] = Timeout,
         };
 
         var group = new JsonObject();
@@ -251,11 +269,6 @@ public static class CodexIntegration
     /// </summary>
     private static bool IsOurs(JsonNode? group) => Commands(group)
         .Any(c => c.Contains(ScriptName, StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>This exact script, at this exact path, for this exact event.</summary>
-    private static bool RunsExactly(JsonNode? group, string kind) => Commands(group)
-        .Any(c => c.Contains(ScriptPath, StringComparison.OrdinalIgnoreCase)
-                  && c.EndsWith(" " + kind, StringComparison.Ordinal));
 
     private static IEnumerable<string> Commands(JsonNode? group)
     {
