@@ -127,11 +127,15 @@ public sealed class TerminalSession : IDisposable
             WorkingDirectoryChanged?.Invoke(cwd);
         };
         Emulator.ResponseRequested += WriteRaw;
-        Emulator.CommandExecuted += cmd =>
-        {
-            NoteCommand(cmd);
-            CommandExecuted?.Invoke(cmd);
-        };
+        // Deliberately does NOT call NoteCommand. This fires on an OSC 133
+        // prompt mark and hands over text scraped off the screen, and a prompt
+        // mark is a byte sequence anything writing to the pty can emit. A
+        // program that prints "ssh evil.example", then prints a prompt mark,
+        // would otherwise have its output parsed as a command the user typed,
+        // and the host it named would count as one Zharp watched the user
+        // reach: the one kind of host Zharp will dial by itself. History is a
+        // different question, since a wrong entry there is only ever wrong.
+        Emulator.CommandExecuted += cmd => CommandExecuted?.Invoke(cmd);
         Emulator.BellRang += () => Bell?.Invoke();
         Emulator.AgentReported += payload => AgentReported?.Invoke(payload);
         Emulator.PromptReturned += () =>
@@ -148,9 +152,11 @@ public sealed class TerminalSession : IDisposable
     /// <summary>
     /// Notices an `ssh` being run, from the command line the user typed.
     ///
-    /// Fires both when Enter is pressed and again when the block finishes, in
-    /// that order, and the second one is harmless: the prompt that ends the
-    /// block clears the host straight afterwards.
+    /// Called from exactly one place, the Enter path in Send, because this is
+    /// what decides which machine Zharp will open its own ssh connection to.
+    /// Anything reached from terminal output is a host Zharp merely heard
+    /// about, and those are for saying where you are, never for deciding where
+    /// to connect.
     /// </summary>
     private void NoteCommand(string command)
     {
