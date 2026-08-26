@@ -47,6 +47,19 @@ elsewhere, and only a value that looks like a path is believed.
 If none of the three yields a directory, the panel says so. "Somewhere on
 srv1" is a true statement; the local repository is not.
 
+**A second, different name from the far end.** `ssh bastion` and then `ssh
+srv2` at the bastion's own prompt is invisible: the prompt marks belong to the
+local shell, so nothing over there is read. All Zharp sees is OSC 7 changing
+its hostname mid-session. The macOS build treats that as losing the machine:
+the host it was holding reaches the first hop and not this one, so it is
+demoted to a name that can be shown and cannot be dialled, and the panel says
+so until the user logs in again. The Windows build keeps the first host and
+goes on reading git through it. Demoting is the safer of the two, because
+reading through the first hop means showing a different computer's repository
+under this computer's name, which is the failure this whole feature exists to
+end. The first name a watched host reports is still accepted against it, so an
+ssh config alias (`ssh srv1` reporting `web-prod-01`) keeps working.
+
 ## Reading git over there
 
 `git` runs on the machine the repository is on. Zharp opens a second ssh
@@ -85,6 +98,17 @@ that could hang with no explanation.
 as the local panel, for the same reason: the terminal is one pane away and is
 better at all of it.
 
+**It never carries an option that names a program.** The flags off your `ssh`
+command line are what let the second connection reach the same machine, so
+most of them are kept. `-F` and `-I` are not: one names a file of further
+options and the other a shared library ssh loads. A `-o` is kept only for an
+allowlist of keywords, because `ProxyCommand`, `LocalCommand` and
+`KnownHostsCommand` all live behind `-o` and all run through a shell, and this
+connection is opened by a timer rather than by a person. `PermitLocalCommand=no`
+and `ClearAllForwardings=yes` go in ahead of everything for the same reason.
+Your own `ssh_config` still applies, so the usual case keeps working. This is
+macOS only so far; the Windows build carries `-F`, `-I` and every `-o`.
+
 **It never dials a machine it only heard about.** A host learned from OSC 7 or
 a window title is a name that arrived over the wire from a program on another
 computer. Zharp will use it to say where you are, and will not use it to decide
@@ -115,4 +139,15 @@ from the wrong computer.
 stub that ignores the connection flags and starts a local POSIX shell, so the
 handshake, the framing, the quoting and the encoding are all exercised for real
 on a machine with no server to connect to. See the ssh transport section in
-`windows/tests/Zharp.Core.SmokeTests/Program.cs`.
+`windows/tests/Zharp.Core.SmokeTests/Program.cs`, and the one in
+`macos/Tests/ZharpCoreSmokeTests/main.swift` with its stub at
+`macos/Tests/Fixtures/ssh-stub.sh`.
+
+macOS has one extra thing to get right that Windows does not. The injected
+shell hooks report `gethostname()`, and a Mac named by DHCP calls itself
+something like `192.168.1.25` there while Foundation says `foo.local` and the
+Bonjour name says `Foo`. All three are the same computer, so "is this host me"
+is a set of names and addresses rather than one comparison. Getting it wrong
+marks every ordinary local tab as remote, which costs the tab subtitle, the
+changes panel and history for every session: worse than the bug the host field
+was added to fix.

@@ -32,6 +32,7 @@ final class SettingsView: ChromeView {
     private var cursorCombo: ActionPopUpButton!
     private var scrollbackBox: NumberBox!
     private var agentAlertToggle: ActionSwitch!
+    private var remoteGitToggle: ActionSwitch!
     private var fontSizeBox: NumberBox!
     private var shellCombo: ActionPopUpButton!
     private var noColorToggle: ActionSwitch!
@@ -159,6 +160,7 @@ final class SettingsView: ChromeView {
         fontSizeBox.setValue(settings.fontSize)
         scrollbackBox.setValue(Double(settings.scrollbackLines))
         agentAlertToggle.state = settings.agentNotifications ? .on : .off
+        remoteGitToggle.state = settings.remoteGit ? .on : .off
         inputPositionGrid.setSelection(AppSettings.inputPositionToCode(settings.inputPosition))
         noColorToggle.state = settings.overrideNoColor ? .on : .off
         restoreToggle.state = settings.restoreSessions ? .on : .off
@@ -420,6 +422,20 @@ final class SettingsView: ChromeView {
             self?.apply { self?.settings.agentNotifications = on }
         }
 
+        remoteGitToggle = toggle(settings.remoteGit) { [weak self] on in
+            self?.apply {
+                self?.settings.remoteGit = on
+                SshGitChannels.enabled = on
+
+                // Turning it off drops the connections that are already open
+                // instead of letting them idle out five minutes later. The
+                // reasons to switch this off (an audited host, a login alert)
+                // are all about the connection existing at all, so somebody
+                // switching it off means now.
+                if !on { SshGitChannels.closeAll() }
+            }
+        }
+
         add(p, [
             sectionHeader("History", first: true),
             row("Scrollback lines", "History kept per session. Applies to new sessions.",
@@ -429,6 +445,9 @@ final class SettingsView: ChromeView {
             row("When an AI agent needs you",
                 "Desktop notification and a bouncing Dock icon while Zharp is not the app in front. Click it to jump to the session. The tab always shows it either way.",
                 agentAlertToggle),
+            row("Read git over ssh",
+                "Shows changes from the machine you are connected to. Zharp opens one read-only connection per host, using a key: it never asks for a password. Off means the panel names the machine and stops there, which is the right setting on a host where every login is audited or a second session would trip an alert.",
+                remoteGitToggle),
             divider(),
         ])
         return p

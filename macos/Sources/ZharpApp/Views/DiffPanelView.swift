@@ -71,8 +71,10 @@ final class DiffPanelView: ChromeView {
 
     private(set) var totalAdded = 0
     private(set) var totalRemoved = 0
-    /// The repository being shown, or nil when the session is not inside one.
-    private(set) var repoRoot: String?
+    /// The repository being shown, machine included, or nil when the session is
+    /// not inside one. A path on its own could not say which computer it is on,
+    /// and every question below is asked of that computer.
+    private(set) var repoRoot: SessionLocation?
 
     // ------------------------------------------------------------- constants
 
@@ -85,6 +87,13 @@ final class DiffPanelView: ChromeView {
     /// enough that git is not being run constantly, fast enough that saving a
     /// file in an editor shows up without asking.
     private static let pollInterval: TimeInterval = 2
+
+    /// The same idea over ssh, slowed down. Two seconds is chosen against the
+    /// cost of running git on a local disk; the same rate against a machine
+    /// across a network is a steady trickle of traffic and remote processes for
+    /// a panel nobody may be looking at. Six seconds still catches a save
+    /// before you have finished looking away.
+    private static let remotePollInterval: TimeInterval = 6
 
     private static let headerHeight: CGFloat = 34
     /// A floor as well as a ceiling: the list sizes to its content, and without
@@ -104,6 +113,12 @@ final class DiffPanelView: ChromeView {
 
     private let header = ChromeView(fill: .none)
     private let gitIcon = Label.icon(Icons.git, size: 14, color: Chrome.current.subtleIcon)
+    /// Which machine this repository is on, shown only when that is not this
+    /// one. A chip reading "local" on every session would be noise; a chip
+    /// naming a server is the one fact that changes what everything below it
+    /// means.
+    private let hostChip = ChromeView(fill: .none)
+    private let hostLabel = Label.make("", size: 10.5, opacity: 0.75)
     private let repoLabel = Label.make("", size: 12.5)
     private let branchLabel = Label.make("", size: 12, opacity: 0.55)
     private let copyButton = IconButton(glyph: Icons.copy, glyphSize: 15, side: 24)
@@ -134,7 +149,7 @@ final class DiffPanelView: ChromeView {
 
     // ----------------------------------------------------------------- state
 
-    private var pendingCwd: String?
+    private var pendingLocation: SessionLocation?
     private var changes: [GitFileChange] = []
     private var rows: [DiffFileRowView] = []
     private var selectedIndex = -1
@@ -218,7 +233,19 @@ final class DiffPanelView: ChromeView {
         header.translatesAutoresizingMaskIntoConstraints = false
         addSubview(header)
 
-        let title = NSStackView(views: [gitIcon, repoLabel, branchLabel])
+        hostChip.cornerRadius = 4
+        hostChip.hairlineEdges = NSEdgeInsets(top: 1, left: 1, bottom: 1, right: 1)
+        hostChip.translatesAutoresizingMaskIntoConstraints = false
+        hostChip.isHidden = true
+        hostChip.addSubview(hostLabel)
+        NSLayoutConstraint.activate([
+            hostLabel.leadingAnchor.constraint(equalTo: hostChip.leadingAnchor, constant: 5),
+            hostLabel.trailingAnchor.constraint(equalTo: hostChip.trailingAnchor, constant: -5),
+            hostLabel.topAnchor.constraint(equalTo: hostChip.topAnchor, constant: 1),
+            hostLabel.bottomAnchor.constraint(equalTo: hostChip.bottomAnchor, constant: -2),
+        ])
+
+        let title = NSStackView(views: [gitIcon, hostChip, repoLabel, branchLabel])
         title.orientation = .horizontal
         title.spacing = 7
         title.alignment = .centerY
@@ -372,7 +399,8 @@ final class DiffPanelView: ChromeView {
     }
 
     /// git only runs while the panel is actually on screen. A closed panel that
-    /// kept polling would keep a repository warm for a view nobody can see.
+    /// kept polling would keep a repository warm for a view nobody can see, and
+    /// over ssh it would keep a login open on somebody's server for it.
     private func updatePolling() {
         let live = window != nil && !isHiddenOrHasHiddenAncestor
         if !live {
@@ -380,15 +408,22 @@ final class DiffPanelView: ChromeView {
             poll = nil
             return
         }
-        if poll != nil { return }
-        let timer = Timer(timeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
+        let wanted = pendingLocation?.isRemote == true
+            ? Self.remotePollInterval : Self.pollInterval
+        // A rate change means a new timer: a Timer's interval is fixed once it
+        // is scheduled, so the only way to slow down for a session that has
+        // moved to another machine is to replace it.
+        if let poll, abs(poll.timeInterval - wanted) < 0.001 { return }
+
+        poll?.invalidate()
+        let timer = Timer(timeInterval: wanted, repeats: true) { [weak self] _ in
             self?.refresh(quiet: true)
         }
         // .common so the poll keeps running while the splitter is being dragged
         // or the diff is being scrolled.
         RunLoop.main.add(timer, forMode: .common)
         poll = timer
-        // Opening should not sit blank for up to two seconds waiting for a tick.
+        // Opening should not sit blank for a whole interval waiting for a tick.
         refresh(quiet: true)
     }
 
@@ -398,17 +433,22 @@ final class DiffPanelView: ChromeView {
 
     // ---------------------------------------------------------------- refresh
 
-    /// Points the panel at the directory the active session is in.
-    /// `force` re-reads even when the directory has not moved. The shell
-    /// reports the same directory constantly through OSC 7, so the default is
-    /// to ignore a repeat, but switching tabs is a different question: the
-    /// panel is shared by the window, and the new session needs its own answer
-    /// even when it happens to be standing in the same repository.
-    func setWorkingDirectory(_ cwd: String?, force: Bool = false) {
-        if !force, (pendingCwd ?? "").caseInsensitiveCompare(cwd ?? "") == .orderedSame { return }
+    /// Points the panel at wherever the active session is standing, which may
+    /// be on another machine.
+    ///
+    /// `force` re-reads even when nothing has moved. The shell reports the same
+    /// directory constantly through OSC 7, so the default is to ignore a
+    /// repeat, but switching tabs is a different question: the panel is shared
+    /// by the window, and the new session needs its own answer even when it
+    /// happens to be standing in the same repository.
+    func setLocation(_ place: SessionLocation?, force: Bool = false) {
+        if !force, pendingLocation == place { return }
         rememberPlace()
-        let moved = leavesShownRepository(cwd)
-        pendingCwd = cwd
+        let moved = leavesShownRepository(place)
+        pendingLocation = place
+        // A session that has just changed machine changes how often the panel
+        // is allowed to ask.
+        updatePolling()
         // `git status` on a large working tree takes seconds, not milliseconds:
         // a cold read of a 1.2 GB tree measured 2.4s here, against 47ms warm.
         // Leaving the previous repository's files up for that whole time is
@@ -423,26 +463,43 @@ final class DiffPanelView: ChromeView {
             following = nil
             repoLabel.stringValue = ""
             branchLabel.stringValue = ""
-            showEmpty("Reading changes", "Looking at \(shortName(cwd)).")
+            showHost(place?.remote?.label)
+            showEmpty("Reading changes", "Looking at \(shortName(place)).")
         }
         refresh()
     }
 
-    /// True when `cwd` is outside the repository currently on screen, so what
+    /// True when `place` is outside the repository currently on screen, so what
     /// is displayed cannot possibly describe it. A move WITHIN the same
     /// repository keeps the view, since it still describes the right place and
     /// blanking it would only flicker.
-    private func leavesShownRepository(_ cwd: String?) -> Bool {
+    private func leavesShownRepository(_ place: SessionLocation?) -> Bool {
         guard let root = repoRoot else { return false }
-        guard let cwd, !cwd.isEmpty else { return true }
-        let normalised = (cwd as NSString).standardizingPath
-        let rootPath = (root as NSString).standardizingPath
+        guard let place, place.hasPath else { return true }
+        // A different machine is always a different repository, whatever the
+        // paths look like: /home/me/app exists on both, which is the whole
+        // reason the machine travels with the path.
+        guard place.remote == root.remote else { return true }
+
+        if place.isRemote {
+            // Compared the way the far end would: POSIX arithmetic, case
+            // sensitive, and nothing resolved against local disk. A tilde is
+            // left alone here, so an unexpanded ~ counts as a move and the
+            // read fills it back in, which is cheaper than being wrong.
+            return place.path != root.path
+                && PosixPath.relative(place.path, under: root.path) == nil
+        }
+
+        let normalised = (place.path as NSString).standardizingPath
+        let rootPath = (root.path as NSString).standardizingPath
         return normalised != rootPath && !normalised.hasPrefix(rootPath + "/")
     }
 
-    private func shortName(_ cwd: String?) -> String {
-        guard let cwd, !cwd.isEmpty else { return "no directory" }
-        return (cwd as NSString).lastPathComponent
+    private func shortName(_ place: SessionLocation?) -> String {
+        guard let place, place.hasPath else {
+            return place?.remote?.label ?? "no directory"
+        }
+        return place.displayName
     }
 
     /// Re-reads the repository.
@@ -453,10 +510,10 @@ final class DiffPanelView: ChromeView {
     func refresh(quiet: Bool = false) {
         refreshGeneration += 1
         let generation = refreshGeneration
-        let cwd = pendingCwd
+        let place = pendingLocation
 
         Task { @MainActor in
-            let repo = await GitStatus.discoverRepo(cwd)
+            let repo = await GitStatus.discoverRepo(place)
             guard generation == self.refreshGeneration else { return }
             self.repoRoot = repo
 
@@ -465,17 +522,9 @@ final class DiffPanelView: ChromeView {
                 // git repository" reads as a contradiction.
                 self.repoLabel.stringValue = ""
                 self.branchLabel.stringValue = ""
+                self.following = nil
                 self.setTotals(0, 0)
-                // A missing git also resolves no repository, and blaming the
-                // directory for it sends the user cd-ing around looking for a
-                // problem that no directory has.
-                if GitStatus.isInstalled {
-                    self.showEmpty("Not a git repository",
-                                   "Open a session inside one and this fills in.")
-                } else {
-                    self.showEmpty("git was not found",
-                                   "Install git, or the Command Line Tools, and reopen this panel.")
-                }
+                await self.showNothingHere(place, generation: generation)
                 return
             }
 
@@ -487,7 +536,8 @@ final class DiffPanelView: ChromeView {
             let fresh = await changesRead
             guard generation == self.refreshGeneration else { return }
 
-            self.repoLabel.stringValue = (repo as NSString).lastPathComponent
+            self.repoLabel.stringValue = repo.displayName
+            self.showHost(repo.remote?.label)
             if let branch, !branch.isEmpty {
                 self.branchLabel.stringValue = "on \(branch)"
             } else {
@@ -622,10 +672,18 @@ final class DiffPanelView: ChromeView {
                     // Untracked paths are absent from numstat: git has nothing
                     // to compare them against. Their whole content is what a
                     // diff would show as added, so it is counted directly.
-                    if change.kind == .untracked {
+                    if change.kind == .untracked, !repo.isRemote {
                         pair = (added: await GitStatus.countUntracked(repoRoot: repo,
                                                                       path: change.path),
                                 removed: 0)
+                    } else if repo.isRemote {
+                        // No per-file fallback across a network. Locally a diff
+                        // per row is a process each and nobody notices; over
+                        // ssh it is a round trip each, every poll, forever, to
+                        // put small grey numbers beside rows the one numstat
+                        // above already answered for. A row numstat did not
+                        // mention has nothing to count.
+                        pair = (added: 0, removed: 0)
                     } else {
                         let raw = await GitStatus.diff(repoRoot: repo, change: change) ?? ""
                         pair = GitStatus.countLines(Self.stripHeaders(raw))
@@ -676,11 +734,22 @@ final class DiffPanelView: ChromeView {
     func follow(_ absolutePath: String) {
         guard let repo = repoRoot else { return }
 
-        let full = (absolutePath as NSString).standardizingPath
-        let root = (repo as NSString).standardizingPath
-        guard full.hasPrefix(root + "/") else { return } // editing outside the repository on screen
-
-        following = String(full.dropFirst(root.count + 1))
+        let relative: String
+        if repo.isRemote {
+            // An agent running over there reports that machine's paths, which
+            // must not be standardised against this one: NSString would resolve
+            // symlinks and a tilde on local disk and hand back an answer about
+            // a filesystem the file is not on.
+            guard let under = PosixPath.relative(absolutePath, under: repo.path) else { return }
+            relative = under
+        } else {
+            let full = (absolutePath as NSString).standardizingPath
+            let root = (repo.path as NSString).standardizingPath
+            // Editing outside the repository on screen.
+            guard full.hasPrefix(root + "/") else { return }
+            relative = String(full.dropFirst(root.count + 1))
+        }
+        following = relative
 
         // git has not necessarily noticed the write yet, so the next couple of
         // reads get to look as well. Bounded because some writes never become a
@@ -785,7 +854,13 @@ final class DiffPanelView: ChromeView {
                                             diffScroll.contentView.bounds.origin.y)
     }
 
-    private static func placeKey(_ repo: String) -> String { repo.lowercased() }
+    /// Keyed on the machine as well as the path, so two checkouts at
+    /// /home/me/app on two different servers do not share one bookmark.
+    /// Folded locally, where the volume usually does not care, and left alone
+    /// over there, where the far end does.
+    private static func placeKey(_ repo: SessionLocation) -> String {
+        repo.isRemote ? repo.description : repo.description.lowercased()
+    }
 
     private func scrollDiff(to offset: CGFloat) {
         // The clip view cannot move past content it has not laid out yet, so
@@ -992,6 +1067,73 @@ final class DiffPanelView: ChromeView {
         diffScroll.isHidden = false
     }
 
+    /// Says why there is no file list, which over ssh is rarely "not a git
+    /// repository".
+    ///
+    /// Each of these has a different thing the user can do about it, and the
+    /// panel used to answer all of them by showing the last local repository it
+    /// had seen: the one wrong answer that looks exactly like a right one.
+    @MainActor
+    private func showNothingHere(_ place: SessionLocation?, generation: Int) async {
+        showHost(place?.remote?.label)
+
+        guard let place, let remote = place.remote else {
+            // A missing git also resolves no repository, and blaming the
+            // directory for it sends the user cd-ing around looking for a
+            // problem that no directory has.
+            if GitStatus.isInstalled {
+                showEmpty("Not a git repository",
+                          "Open a session inside one and this fills in.")
+            } else {
+                showEmpty("git was not found",
+                          "Install git, or the Command Line Tools, and reopen this panel.")
+            }
+            return
+        }
+
+        let host = remote.label
+
+        // The other half of the rule the type already enforces, stated where a
+        // reader of the panel will meet it: a host learned from OSC 7 or a
+        // window title is a name that arrived over the wire from a program on
+        // another computer. It is used to say where you are, and it is never a
+        // reason to open a connection. `SshGitChannels.channel(for:)` refuses
+        // it too, so this is the message rather than the mechanism.
+        if !remote.canConnect {
+            showEmpty("Connected to \(host)",
+                      "Zharp did not see the ssh command that got here, so it has no way to reach the same machine on its own.")
+            return
+        }
+
+        // Before asking whether the machine can be reached, because without a
+        // directory there is nothing to ask it. Connecting here would be a
+        // login on someone's server to find out something already known.
+        if !place.hasPath {
+            showEmpty("Somewhere on \(host)",
+                      "The shell over there has not said which directory it is in. Zharp reads OSC 7, and the window title as a fallback.")
+            return
+        }
+
+        let problem = await GitStatus.remoteProblem(remote)
+        // Opening a connection takes a handshake, and a tab switch during it
+        // would otherwise paint this answer over the next session's repository.
+        guard generation == refreshGeneration else { return }
+
+        if let problem, !problem.isEmpty {
+            showEmpty("Cannot read git on \(host)", problem)
+            return
+        }
+        showEmpty("Not a git repository", "\(place.path) on \(host) is not inside one.")
+    }
+
+    /// Names the machine in the header while the panel is showing another
+    /// computer's work. Absent for a local repository, which is most of them.
+    private func showHost(_ label: String?) {
+        let name = label ?? ""
+        hostLabel.stringValue = name
+        hostChip.isHidden = name.isEmpty
+    }
+
     // ----------------------------------------------------------------- debug
 
     /// A textual snapshot of what the panel is showing, for the headless checks
@@ -1000,10 +1142,16 @@ final class DiffPanelView: ChromeView {
     func debugState() -> String {
         var lines: [String] = []
         // The empty state keeps its last title while hidden, so naming it when
-        // it is not showing would report a repository as missing.
-        let empty = emptyState.isHidden ? "no" : emptyTitle.stringValue
-        lines.append("repo=\(repoRoot ?? "-") branch=\(branchLabel.stringValue) "
+        // it is not showing would report a repository as missing. The body goes
+        // with the title because over ssh the title only names the machine, and
+        // the body is the whole difference between "cannot reach it", "no key
+        // yet" and "turned off in Settings".
+        let empty = emptyState.isHidden
+            ? "no" : "\(emptyTitle.stringValue) / \(emptyBody.stringValue)"
+        let host = repoRoot?.remote.map { "\($0.label)(\($0.canConnect ? "watched" : "reported")) " }
+        lines.append("\(host ?? "")repo=\(repoRoot?.path ?? "-") branch=\(branchLabel.stringValue) "
                      + "files=\(changes.count) selected=\(selectedIndex) "
+                     + "poll=\(poll?.timeInterval ?? 0) "
                      + "totals=+\(totalAdded)/-\(totalRemoved) empty=\(empty)")
         for change in changes {
             lines.append("  \(change.kind) \(change.displayPath) "
@@ -1070,6 +1218,7 @@ final class DiffPanelView: ChromeView {
 
         headerHeight.constant = max(28, Self.headerHeight * next)
         gitIcon.font = Icons.font(size: 14 * next)
+        hostLabel.font = NSFont.systemFont(ofSize: 10.5 * next)
         repoLabel.font = NSFont.systemFont(ofSize: 12.5 * next)
         branchLabel.font = NSFont.systemFont(ofSize: 12 * next)
         for button in [copyButton, refreshButton, closeButton] {

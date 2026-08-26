@@ -1,4 +1,8 @@
 import Foundation
+// For the Bonjour name only. `scutil --get LocalHostName` answers the same
+// thing, but spawning a process to read it would happen on the pty reader
+// thread with the emulator lock held.
+import SystemConfiguration
 
 /// The terminal emulator: owns the main and alternate screen buffers, cursor,
 /// attributes and modes, and executes the VT actions produced by the parser.
@@ -72,8 +76,18 @@ public final class TerminalEmulator {
 
     public private(set) var title: String?
 
-    /// Shell-reported current directory (OSC 7 / OSC 9;9), if any.
+    /// Shell-reported current directory (OSC 7 / OSC 9;9), if any. In the far
+    /// end's own notation when `workingDirectoryHost` is set, so it is only a
+    /// path on this machine while that is nil.
     public private(set) var workingDirectory: String?
+
+    /// The machine `workingDirectory` is on, when a shell has said so and it is
+    /// not this one. Nil for a local directory, which is the usual case and the
+    /// one every caller wrote before this existed.
+    ///
+    /// Read it inside `workingDirectoryChanged`: both halves are settled before
+    /// the callback fires, and the pair is what says where a session is.
+    public private(set) var workingDirectoryHost: String?
 
     private var promptMarksRaw: [Int64] = []
 
@@ -278,7 +292,17 @@ public final class TerminalEmulator {
     }
 
     public var titleChanged: ((String) -> Void)?
+
+    /// The shell has reported a directory. It fires when either half of
+    /// (machine, path) moves, so a session that hops between two computers
+    /// standing in the same path is still reported: read `workingDirectoryHost`
+    /// alongside the argument rather than treating the path as local.
+    ///
+    /// The argument stayed a bare path so the existing subscribers keep
+    /// compiling; widening it would have made every call site opt in to
+    /// remoteness at once, and most of them do not care.
     public var workingDirectoryChanged: ((String) -> Void)?
+
     public var responseRequested: ((String) -> Void)?
     public var bellRang: (() -> Void)?
 
@@ -882,15 +906,146 @@ public final class TerminalEmulator {
         responseRequested?(sequence)
     }
 
-    private func setWorkingDirectory(_ path: String?) {
+    /// `host` is nil for the sequences that can only ever describe this machine
+    /// (OSC 9;9), and for OSC 7 it is whatever the shell put in the URI.
+    private func setWorkingDirectory(_ path: String?, host: String? = nil) {
         guard var path, !path.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        // Trim a trailing separator, but keep the filesystem root as "/".
-        while path.count > 1, path.hasSuffix("/") || path.hasSuffix("\\") {
-            path.removeLast()
+
+        let remote = Self.isRemoteHost(host)
+        if remote {
+            // Kept in the far end's own notation, and only "/" is trimmed: a
+            // backslash is an ordinary character in a POSIX filename, so
+            // trimming one here would quietly rename somebody's directory.
+            while path.count > 1, path.hasSuffix("/") {
+                path.removeLast()
+            }
+        } else {
+            // Trim a trailing separator, but keep the filesystem root as "/".
+            while path.count > 1, path.hasSuffix("/") || path.hasSuffix("\\") {
+                path.removeLast()
+            }
         }
-        if path == workingDirectory { return }
+
+        let newHost = remote ? host : nil
+        // Both halves, because a session that moves between two machines while
+        // standing in the same path has still moved, and that is the case the
+        // panel most needs to hear about: two checkouts at /home/me/app.
+        if path == workingDirectory, newHost == workingDirectoryHost { return }
+        workingDirectoryHost = newHost
         workingDirectory = path
         workingDirectoryChanged?(path)
+    }
+
+    // ------------------------------------------------- which machine is this
+
+    /// Whether an OSC 7 host names a computer other than this one.
+    ///
+    /// The Windows build answers this with a single comparison against the
+    /// machine name. That cannot be copied here, because the shell hooks Zharp
+    /// injects all report `gethostname()`, and on a Mac that takes its name
+    /// from DHCP `gethostname()` is something like "192.168.1.25" while
+    /// `ProcessInfo.hostName` says "foo.local" and the Bonjour name says "Foo".
+    /// All three are this machine. Comparing against only one of them would
+    /// mark every local zsh and bash tab as remote, which breaks the tab
+    /// subtitle, the changes panel and history for every ordinary session: far
+    /// worse than the bug the host field was added to fix.
+    private static func isRemoteHost(_ host: String?) -> Bool {
+        guard let host else { return false }
+        let name = normalizeHostName(host)
+        // An empty host means the local machine by the file URI scheme itself,
+        // which is what pwsh's hook and a bare "file:///path" emit.
+        if name.isEmpty { return false }
+        return !isLocalName(name)
+    }
+
+    /// Folds the spellings of one machine together: case, the `[...]` brackets
+    /// an IPv6 literal wears in a URI, a scope suffix, an FQDN's trailing root
+    /// dot, and `.local`. Stripping `.local` is what makes the Bonjour name
+    /// "Foo" and the reported "foo.local" the same answer, rather than having
+    /// to hold both spellings of every name in the set.
+    private static func normalizeHostName(_ host: String) -> String {
+        var name = host.trimmingCharacters(in: .whitespaces).lowercased()
+        if name.count > 2, name.hasPrefix("["), name.hasSuffix("]") {
+            name = String(name.dropFirst().dropLast())
+        }
+        if let scope = name.firstIndex(of: "%") {
+            name = String(name[name.startIndex..<scope])
+        }
+        while name.hasSuffix(".") { name.removeLast() }
+        if name.hasSuffix(".local") { name.removeLast(6) }
+        return name
+    }
+
+    private static let localNamesLock = NSLock()
+    private static var localNames: Set<String> = []
+    private static var localNamesBuiltAt = Date.distantPast
+
+    /// How long a miss waits before the set is built again. The names do change
+    /// while the app runs, since joining a network can rename the machine, and
+    /// a rebuild on the first miss is what notices. The interval is only there
+    /// so a genuinely remote session, which misses on every `cd`, does not pay
+    /// for the lookup each time: this runs on the pty reader thread with the
+    /// emulator lock held, and `Host.current().names` costs milliseconds.
+    private static let localNamesMaxAge: TimeInterval = 10
+
+    private static func isLocalName(_ normalized: String) -> Bool {
+        localNamesLock.lock()
+        defer { localNamesLock.unlock() }
+        if localNames.contains(normalized) { return true }
+        if Date().timeIntervalSince(localNamesBuiltAt) < localNamesMaxAge { return false }
+        localNames = buildLocalNames()
+        localNamesBuiltAt = Date()
+        return localNames.contains(normalized)
+    }
+
+    private static func buildLocalNames() -> Set<String> {
+        var names: Set<String> = ["localhost", "127.0.0.1", "::1"]
+
+        // What the shell hooks in ShellDiscovery actually emit: zsh's $HOST,
+        // bash's $HOSTNAME and fish's `hostname` all end up here.
+        var buffer = [CChar](repeating: 0, count: 256)
+        if gethostname(&buffer, buffer.count - 1) == 0 {
+            names.insert(String(cString: buffer))
+        }
+
+        names.insert(ProcessInfo.processInfo.hostName)
+        names.formUnion(Host.current().names)
+
+        // The Bonjour name, which is what a hand-written .bashrc reporting
+        // `scutil --get LocalHostName` puts in the URI.
+        if let bonjour = SCDynamicStoreCopyLocalHostName(nil) as String? {
+            names.insert(bonjour)
+        }
+
+        names.formUnion(interfaceAddresses())
+
+        return Set(names.map(normalizeHostName))
+    }
+
+    /// Every address this machine answers on. Worth the syscall because the
+    /// name a DHCP network hands out here is itself an address, so "which
+    /// machine is this" and "which addresses are mine" are the same question.
+    /// Reaching one of our own addresses is reaching us, so nothing genuinely
+    /// remote can hide in this list.
+    private static func interfaceAddresses() -> [String] {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0, let first = head else { return [] }
+        defer { freeifaddrs(head) }
+
+        var found: [String] = []
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        while let entry = cursor {
+            cursor = entry.pointee.ifa_next
+            guard let address = entry.pointee.ifa_addr else { continue }
+            let family = address.pointee.sa_family
+            guard family == UInt8(AF_INET) || family == UInt8(AF_INET6) else { continue }
+
+            var text = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let ok = getnameinfo(address, socklen_t(address.pointee.sa_len),
+                                 &text, socklen_t(text.count), nil, 0, NI_NUMERICHOST)
+            if ok == 0 { found.append(String(cString: text)) }
+        }
+        return found
     }
 
     /// The OSC 777 verb and title an agent uses to address Zharp specifically.
@@ -913,12 +1068,22 @@ public final class TerminalEmulator {
         agentReported?(String(rest[rest.index(after: sep)...]))
     }
 
-    private static func parseFileUri(_ uri: String) -> String? {
-        guard uri.lowercased().hasPrefix("file://") else { return nil }
+    /// Splits `file://host/path` into its two halves. The host used to be
+    /// dropped here, which is the whole of the bug: a shell on the far end of
+    /// an ssh connection reports its own directory through OSC 7, so throwing
+    /// the machine away left Zharp holding a remote path it read off local disk.
+    ///
+    /// Each half is unescaped separately, after the split rather than before:
+    /// a %2F in the path is a slash inside a filename, and decoding first would
+    /// promote it to the separator that ends the host.
+    private static func parseFileUri(_ uri: String) -> (host: String?, path: String?) {
+        guard uri.lowercased().hasPrefix("file://") else { return (nil, nil) }
         let rest = String(uri.dropFirst(7))
-        guard let slash = rest.firstIndex(of: "/") else { return nil }
-        let pathPart = String(rest[slash...]) // drop host part
-        return pathPart.removingPercentEncoding ?? pathPart
+        guard let slash = rest.firstIndex(of: "/") else { return (nil, nil) }
+        let hostPart = String(rest[rest.startIndex..<slash])
+        let pathPart = String(rest[slash...])
+        return (hostPart.removingPercentEncoding ?? hostPart,
+                pathPart.removingPercentEncoding ?? pathPart)
     }
 }
 
@@ -980,11 +1145,17 @@ extension TerminalEmulator: VtHandler {
             titleChanged?(arg)
         case 7:
             // OSC 7: file://[host]/path - xterm working-directory convention.
-            setWorkingDirectory(Self.parseFileUri(arg))
+            // The host is the half that says which machine the path is on.
+            let (host, path) = Self.parseFileUri(arg)
+            setWorkingDirectory(path, host: host)
         case 9:
             // OSC 9;9;<path> - ConEmu/Windows Terminal working-directory
             // convention. NOT usable as a prompt mark: the position it lands
             // at in the stream is not the prompt line.
+            //
+            // It carries no host, so it always describes this machine: a
+            // session that reaches here has come home as far as the directory
+            // is concerned, and the host is cleared with it.
             if arg.hasPrefix("9;") {
                 setWorkingDirectory(String(arg.dropFirst(2))
                     .trimmingCharacters(in: CharacterSet(charactersIn: "\"")))

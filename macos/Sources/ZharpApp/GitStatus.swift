@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import ZharpCore
 
 /// How a file differs from HEAD, as git reports it.
 enum GitChangeKind {
@@ -54,6 +55,13 @@ struct GitFileChange {
 ///
 /// Everything here reads. Nothing in this file stages, commits, checks out,
 /// fetches or writes to the repository in any way.
+///
+/// A session over ssh is asked the same questions through `SshGitChannel`,
+/// which runs the same read-only commands on the machine the user is actually
+/// standing on. Every entry point takes a `SessionLocation` rather than a path
+/// for exactly that reason: a path alone cannot say which computer it belongs
+/// to, and on macOS a remote POSIX path is a perfectly ordinary local one, so
+/// answering with the wrong machine is silent. That is the bug this replaced.
 enum GitStatus {
 
     /// Long enough for a cold index on a large repository, short enough that a
@@ -77,29 +85,65 @@ enum GitStatus {
     /// resolved or run through realpath: git has already applied its own idea
     /// of the path (/tmp really is /private/tmp here), and every later call has
     /// to agree with it.
-    static func discoverRepo(_ workingDirectory: String?) async -> String? {
-        guard let workingDirectory,
-              !workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return nil }
+    static func discoverRepo(_ at: SessionLocation?) async -> SessionLocation? {
+        guard let at, at.hasPath else { return nil }
+
+        if at.isRemote {
+            guard let remote = at.remote,
+                  let channel = await SshGitChannels.channel(for: remote),
+                  channel.isUsable
+            else { return nil }
+
+            // A remote shell reports ~/work as often as it reports the full
+            // path, and git would go looking for a directory literally called
+            // "~". The far end's own home, read once when the channel opened.
+            let here = PosixPath.expandHome(at.path, home: channel.home)
+            let root = await channel.runGit(in: here, ["rev-parse", "--show-toplevel"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return root.isEmpty ? nil : at.withPath(root)
+        }
 
         // A session can outlive the directory it was started in; spawning a
         // process to be told so is wasted work.
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: workingDirectory,
+        guard FileManager.default.fileExists(atPath: at.path,
                                              isDirectory: &isDirectory),
               isDirectory.boolValue
         else { return nil }
 
-        let result = await run(in: workingDirectory, "rev-parse", "--show-toplevel")
+        let result = await run(in: at, "rev-parse", "--show-toplevel")
         guard result.ok else { return nil }  // exit 128: not a repository
 
         let root = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return root.isEmpty ? nil : root
+        return root.isEmpty ? nil : at.withPath(root)
+    }
+
+    /// Why a machine reached over ssh cannot be read, or nil when it can.
+    ///
+    /// Shown instead of a file list, because "not a git repository" would be a
+    /// guess when the truth is that nobody has been able to ask. Each of the
+    /// answers here has a different thing the user can do about it, and the
+    /// panel used to give all of them the same one: the last local repository
+    /// it had seen, which is the single wrong answer that looks like a right
+    /// one.
+    static func remoteProblem(_ host: RemoteHost) async -> String? {
+        guard SshGitChannels.enabled else {
+            return "Reading git over ssh is turned off in Settings."
+        }
+        guard let channel = await SshGitChannels.channel(for: host) else {
+            // The registry refuses two things: the switch being off, which was
+            // just tested, and a host Zharp only heard about, which cannot be
+            // dialled at all.
+            return host.canConnect
+                ? "Reading git over ssh is turned off in Settings."
+                : "Zharp did not see the ssh command that got here, so it has no way to reach the same machine on its own."
+        }
+        return channel.isUsable ? nil : (channel.problem ?? "The connection could not be opened")
     }
 
     /// The branch name, or a short commit id when the head is detached, or nil
     /// when neither can be read (a repository with no commits yet).
-    static func currentBranch(repoRoot: String) async -> String? {
+    static func currentBranch(repoRoot: SessionLocation) async -> String? {
         let branch = await run(in: repoRoot, "rev-parse", "--abbrev-ref", "HEAD")
         guard branch.ok else { return nil }
 
@@ -123,7 +167,7 @@ enum GitStatus {
     /// -z the separator is the one byte a pathname cannot contain and
     /// everything between separators is the raw name, which is why nothing
     /// below unquotes anything: there is nothing to unquote.
-    static func changes(repoRoot: String) async -> [GitFileChange] {
+    static func changes(repoRoot: SessionLocation) async -> [GitFileChange] {
         let result = await run(in: repoRoot, "status", "--porcelain=v1", "-z",
                                "--untracked-files=all", "--no-renames")
         guard result.ok else { return [] }
@@ -142,7 +186,7 @@ enum GitStatus {
     /// overload cannot tell tracked from untracked from its arguments, so it
     /// works it out when the first diff comes back empty.
     /// `diff(repoRoot:change:)` knows the kind up front and skips all of that.
-    static func diff(repoRoot: String, path: String, staged: Bool) async -> String? {
+    static func diff(repoRoot: SessionLocation, path: String, staged: Bool) async -> String? {
         let tracked = await run(in: repoRoot, "diff", "HEAD", "--no-color", "--", path)
         if tracked.ok && !tracked.output.isEmpty { return tracked.output }
 
@@ -151,7 +195,11 @@ enum GitStatus {
         // while the panel was open). Ask instead of guessing, because showing a
         // reverted file as one long addition is worse than the extra launch.
         let known = await run(in: repoRoot, "ls-files", "--error-unmatch", "-z", "--", path)
-        if known.ok { return tracked.ok ? "" : nil }
+        // There is no exit status over ssh, so tracked-ness is read off the
+        // output instead: ls-files prints the path when it knows it and nothing
+        // at all when it does not.
+        let isTracked = repoRoot.isRemote ? !known.output.isEmpty : known.ok
+        if isTracked { return tracked.ok ? "" : nil }
 
         return await untrackedDiff(repoRoot: repoRoot, path: path)
     }
@@ -160,7 +208,7 @@ enum GitStatus {
     /// use: knowing the kind sends an untracked file straight to the empty-file
     /// comparison instead of paying for a diff against HEAD that can only come
     /// back empty.
-    static func diff(repoRoot: String, change: GitFileChange) async -> String? {
+    static func diff(repoRoot: SessionLocation, change: GitFileChange) async -> String? {
         if change.kind == .untracked {
             return await untrackedDiff(repoRoot: repoRoot, path: change.path)
         }
@@ -180,7 +228,7 @@ enum GitStatus {
     /// against: `countUntracked(repoRoot:path:)` covers those. Binary files
     /// report "-" for both numbers and land here as (0, 0), since the line
     /// count of a binary is not a number worth showing anyone.
-    static func counts(repoRoot: String) async -> [String: (added: Int, removed: Int)] {
+    static func counts(repoRoot: SessionLocation) async -> [String: (added: Int, removed: Int)] {
         var totals: [String: (added: Int, removed: Int)] = [:]
 
         // --no-renames matches `changes` above. With rename detection on, a
@@ -213,8 +261,25 @@ enum GitStatus {
     /// An untracked file's whole content is what a diff would show as added, so
     /// its line count is its added count. Read directly rather than through
     /// git, which would need one process per new file to say the same thing.
-    static func countUntracked(repoRoot: String, path: String) async -> Int {
-        let full = (repoRoot as NSString).appendingPathComponent(path)
+    static func countUntracked(repoRoot: SessionLocation, path: String) async -> Int {
+        if repoRoot.isRemote {
+            // Reading the file back over the wire to count its newlines would
+            // move the whole file to put one small grey number in a list row.
+            // wc is on every machine that has a shell.
+            guard let remote = repoRoot.remote,
+                  let channel = await SshGitChannels.channel(for: remote),
+                  channel.isUsable
+            else { return 0 }
+
+            // "     12 path" on BSD, "12 path" on GNU, so the number is the
+            // first field either way.
+            let answer = await channel.run(in: repoRoot.path, ["wc", "-l", "--", path])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let field = answer.prefix { !$0.isWhitespace }
+            return Int(field) ?? 0
+        }
+
+        let full = (repoRoot.path as NSString).appendingPathComponent(path)
         let url = URL(fileURLWithPath: full)
         do {
             let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
@@ -318,7 +383,7 @@ enum GitStatus {
     /// An untracked file is compared with the empty file, which prints it as
     /// one long addition: what "what changed" means for a file that is
     /// entirely new.
-    private static func untrackedDiff(repoRoot: String, path: String) async -> String {
+    private static func untrackedDiff(repoRoot: SessionLocation, path: String) async -> String {
         // --no-index exits 1 when the two files differ, which is the whole
         // reason for asking, so its exit code is not a failure signal here.
         let result = await run(in: repoRoot, allowFailure: true,
@@ -407,8 +472,40 @@ enum GitStatus {
         return developerTools.first { manager.isExecutableFile(atPath: $0) }
     }
 
-    private static func run(in workingDirectory: String, allowFailure: Bool = false,
+    /// The one fork between the two machines, so every question above is asked
+    /// once and answered by whichever computer the session is standing on.
+    private static func run(in at: SessionLocation, allowFailure: Bool = false,
                             _ arguments: String...) async -> GitResult {
+        if at.isRemote {
+            return await runRemote(at, arguments)
+        }
+        return await runLocal(in: at.path, allowFailure: allowFailure, arguments)
+    }
+
+    /// Runs git on the far end of an ssh connection.
+    ///
+    /// There is no exit status here, deliberately. Carrying one back would need
+    /// a temporary file on the user's server for every poll, and no caller in
+    /// this file tells "git failed" from "git printed nothing": a directory
+    /// that is not a repository, a file that is not there and a clean tree all
+    /// mean an empty answer, which is what the panel shows either way. Whether
+    /// the machine can be reached at all is a different question with a
+    /// different answer, and `remoteProblem` is where it is asked.
+    private static func runRemote(_ at: SessionLocation, _ arguments: [String]) async -> GitResult {
+        guard let remote = at.remote,
+              let channel = await SshGitChannels.channel(for: remote),
+              channel.isUsable
+        else { return GitResult(ok: false, output: "", error: "no connection") }
+
+        // Not hardened here. The channel rewrites any argv beginning with git,
+        // and refuses a subcommand that is not on its read-only list, so the
+        // guarantee holds for a caller this file never sees.
+        let output = await channel.runGit(in: at.path, arguments)
+        return GitResult(ok: true, output: output, error: "")
+    }
+
+    private static func runLocal(in workingDirectory: String, allowFailure: Bool,
+                                 _ arguments: [String]) async -> GitResult {
         let handle = RunHandle()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in

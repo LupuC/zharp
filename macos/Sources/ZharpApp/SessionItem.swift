@@ -61,22 +61,30 @@ final class SessionItem {
     /// Raised on the main thread whenever a displayed value changed.
     var changed: (() -> Void)?
 
-    /// Raised on the main thread when the shell reports a new directory (OSC 7).
+    /// Raised on the main thread when the session changes machine or directory.
     ///
-    /// `session.workingDirectoryChanged` is a single closure and this item
-    /// already owns it to keep the tab subtitle honest, so a second assignment
-    /// elsewhere would silently drop the first. Anything else that cares hangs
-    /// itself here instead.
-    var directoryChanged: ((String) -> Void)?
+    /// `session.locationChanged` is a single closure and this item already owns
+    /// it to keep the tab subtitle honest, so a second assignment elsewhere
+    /// would silently drop the first. Anything else that cares hangs itself
+    /// here instead.
+    ///
+    /// This replaced a directory-only event. Typing `ssh` changes where the
+    /// session is without the local directory moving at all, so anything
+    /// listening for a path alone heard nothing at the one moment it mattered.
+    var locationChanged: ((SessionLocation?) -> Void)?
+
+    /// Where this tab is standing, machine included. Nil for the Settings page,
+    /// which is not standing anywhere.
+    var location: SessionLocation? { session?.location }
 
     /// Raised on the main thread once a command has finished, which the
     /// emulator knows from the next prompt's OSC 133 mark. Same reason as
-    /// `directoryChanged`: `session.commandExecuted` is already spoken for.
+    /// `locationChanged`: `session.commandExecuted` is already spoken for.
     var commandFinished: (() -> Void)?
 
     /// Raised on the main thread when this session starts or stops needing you.
     ///
-    /// Single closure, with the same caveat as `directoryChanged`: the owning
+    /// Single closure, with the same caveat as `locationChanged`: the owning
     /// window takes it, and a second assignment would silently drop the first.
     var attentionChanged: ((SessionItem) -> Void)?
 
@@ -162,13 +170,17 @@ final class SessionItem {
         self.title = displayName
         self.shellId = shellId
         self.iconGlyph = Icons.terminal2
-        self.subtitleValue = Self.abbreviate(session.workingDirectory)
+        self.subtitleValue = Self.describe(session.location)
         self.id = Self.makeId()
 
-        session.workingDirectoryChanged = { [weak self] cwd in
+        // The card's second line comes from the location rather than the
+        // directory: a tab that has been sent to another machine kept showing
+        // the local folder it was launched from, which is the one line on the
+        // card whose whole job is to say where you are.
+        session.locationChanged = { [weak self] place in
             DispatchQueue.main.async {
-                self?.subtitle = Self.abbreviate(cwd)
-                self?.directoryChanged?(cwd)
+                self?.subtitle = Self.describe(place)
+                self?.locationChanged?(place)
             }
         }
 
@@ -673,6 +685,18 @@ final class SessionItem {
         self.titleIsCwd = titleIsCwd
         self.showPath = showPath
         changed?()
+    }
+
+    /// The card's second line: an abbreviated path locally, and the machine
+    /// plus whatever is known of the path once the session is somewhere else.
+    ///
+    /// "srv1" on its own is the honest answer when the remote shell has not
+    /// said which directory it is in, and it is still more use than the local
+    /// folder the tab happened to start in. No `~` folding over there: the
+    /// home directory being abbreviated is this machine's, and the path is not.
+    private static func describe(_ place: SessionLocation?) -> String {
+        guard let place, let remote = place.remote else { return abbreviate(place?.path) }
+        return place.hasPath ? "\(remote.label):\(place.path)" : remote.label
     }
 
     static func abbreviate(_ path: String?) -> String {

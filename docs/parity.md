@@ -83,23 +83,26 @@ means it is not implemented.
 | New tab at the last closed tab's directory | Yes | Yes | Not yet | |
 | Floating session search palette | Yes | Yes | Not yet | |
 | Changes panel: git diff beside the terminal | Yes | Yes | Not yet | Read-only. Changed files, per-file diff with line numbers, totals on the title bar |
-| Changes panel over ssh | Yes | Not yet | Not yet | Windows reads git on the machine the session is actually on, over a second read-only connection. macOS still shows the local repository while the shell is elsewhere, which is wrong; see the note below the table |
+| Changes panel over ssh | Yes | Yes | Not yet | Both read git on the machine the session is actually on, over a second read-only connection, and both have a switch in Settings to turn it off. See [docs/remote-sessions.md](remote-sessions.md) |
 | Panes and splits | Not yet | Not yet | Not yet | Roadmap on both |
 
 A session that has been sent to another machine with `ssh` is standing
-somewhere the local `git` knows nothing about. Windows tracks that: the panel
-either shows the remote repository or says which machine it cannot read and
-why, and the sidebar card names the host. macOS does not yet, so its changes
-panel keeps answering with the local repository the tab was launched from. That
-is the one wrong answer that looks like a right one, and it is why this has a
-row of its own rather than a footnote on the row above.
+somewhere the local `git` knows nothing about. Both platforms track that: the
+panel either shows the remote repository or names the machine it cannot read
+and says why, and the sidebar card names the host. The one deliberate
+difference is what happens when a second, different hostname arrives from the
+far end, which means an `ssh` was typed at a remote prompt where Zharp's prompt
+marks cannot see it. Windows keeps reading git through the first hop; macOS
+stops trusting the connection and shows the machine's name without reading
+anything, because reading through the first hop means showing a different
+computer's repository under this computer's name.
 
 ## Shell integration
 
 | Feature | Windows | macOS | Linux | Notes |
 |---|---|---|---|---|
 | Working directory reporting (OSC 7) | Yes | Yes | Not yet | Windows also parses OSC 9;9, the ConEmu convention |
-| Knowing which machine a session is on | Yes | Not yet | Not yet | Windows keeps the host from OSC 7, reads the `ssh` command at the prompt, and falls back to the remote shell's window title |
+| Knowing which machine a session is on | Yes | Yes | Not yet | Both keep the host from OSC 7, read the `ssh` command at the prompt, and fall back to the remote shell's window title. macOS also has to recognise every spelling a Mac answers to, because a machine named by DHCP reports its own IP address as its hostname |
 | Auto-injected prompt hook, no rc file editing | Yes | Yes | Not yet | Each platform hooks the shells it actually ships with: PowerShell, pwsh, cmd and bash on Windows; zsh, bash, fish and pwsh on macOS |
 | Prompt and command marks (OSC 133) | Yes | Yes | Not yet | Both emit and consume `133;A` and `133;B`, which is what blocks are built on. `133;C` and `133;D` are roadmap on both |
 | Strip `NO_COLOR` from spawned shells | Yes | Yes | Not yet | `overrideNoColor` |

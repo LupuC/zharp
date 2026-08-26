@@ -1,5 +1,6 @@
 import AppKit
 import UserNotifications
+import ZharpCore
 
 /// Application entry point and process-wide helpers.
 @main
@@ -69,6 +70,11 @@ final class App: NSObject, NSApplicationDelegate {
         // be routed rather than always landing on the update page.
         UNUserNotificationCenter.current().delegate = self
 
+        // Whether the changes panel may open ssh connections of its own. Set
+        // before the first window, so a session that starts on another machine
+        // never gets one read out of a default the user turned off.
+        SshGitChannels.enabled = App.settings.remoteGit
+
         // Reports from agents that cannot write to a terminal arrive here.
         // Started before any session exists, so nothing can be missed.
         AgentSpool.shared.start()
@@ -111,6 +117,10 @@ final class App: NSObject, NSApplicationDelegate {
         App.closingAll = true
         MainWindowController.saveSessionSnapshot()
         App.settings.save()
+        // Every ssh Zharp opened goes with it. Leaving a login behind on
+        // somebody's server after the window closed is exactly the sort of
+        // thing a terminal should not do.
+        SshGitChannels.closeAll()
         return .terminateNow
     }
 

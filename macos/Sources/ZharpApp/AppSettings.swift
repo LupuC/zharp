@@ -52,6 +52,16 @@ final class AppSettings: Codable {
     /// regardless; this is only about interrupting you elsewhere.
     var agentNotifications = true
 
+    /// Whether Zharp may open its own ssh connection to read git on a machine
+    /// you are already connected to.
+    ///
+    /// It is one extra login per host, held open while you work there and
+    /// closed after five idle minutes, and it only ever reads. Turn it off on
+    /// a host where every session is audited, or where a second connection
+    /// would trip a login alert: the panel then says where you are and stops
+    /// there, rather than answering with this machine's repository.
+    var remoteGit = true
+
     /// Whether the AI agent hooks stay installed. Deliberately has no switch in
     /// Settings: agent support is part of the terminal, not a feature to go and
     /// find, and a tab that cannot say its agent is blocked is the whole thing
@@ -192,7 +202,7 @@ final class AppSettings: Codable {
         case theme, backdrop, backgroundOpacity, tabLayout, sidebarDensity
         case sidebarTitleMode, sidebarShowPath, sidebarShowSearch
         case sidebarVisible, overrideNoColor
-        case agentNotifications, agentIntegration, codexNoticeFor
+        case agentNotifications, remoteGit, agentIntegration, codexNoticeFor
         case restoreSessions, savedSessions, savedActiveIndex
         case fontSize, fontFamily, cursorStyle, inputPosition, scrollbackLines
         case shell, defaultDirectory, lastClosedDirectory, onboarded
@@ -226,6 +236,7 @@ final class AppSettings: Codable {
         sidebarVisible = b(.sidebarVisible, true)
         overrideNoColor = b(.overrideNoColor, true)
         agentNotifications = b(.agentNotifications, true)
+        remoteGit = b(.remoteGit, true)
         agentIntegration = b(.agentIntegration, true)
         codexNoticeFor = s(.codexNoticeFor, "")
         fontSize = d(.fontSize, 13)

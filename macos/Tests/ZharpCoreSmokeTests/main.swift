@@ -16,6 +16,24 @@ func check(_ condition: Bool, _ name: String) {
     }
 }
 
+/// Bridges one async call into the synchronous top-level code this runner is.
+/// The box is what carries the answer back out: a Task cannot return into a
+/// local, and this file has no actor to suspend on.
+final class ResultBox<T>: @unchecked Sendable {
+    var value: T?
+}
+
+func awaitValue<T>(_ operation: @escaping @Sendable () async -> T) -> T {
+    let box = ResultBox<T>()
+    let semaphore = DispatchSemaphore(value: 0)
+    Task {
+        box.value = await operation()
+        semaphore.signal()
+    }
+    semaphore.wait()
+    return box.value!
+}
+
 func newEmu(_ cols: Int = 20, _ rows: Int = 5) -> TerminalEmulator {
     TerminalEmulator(cols: cols, rows: rows)
 }
@@ -308,6 +326,127 @@ do {
     check(cwd == "/Volumes/Data", "OSC 9;9 trailing separator trimmed")
     feed(e, "\u{1b}]7;file:///\u{1b}\\")
     check(cwd == "/", "filesystem root preserved")
+}
+
+// --- which machine the directory is on (OSC 7 host) --------------------------
+//
+// file://host/path carries both halves and the host used to be thrown away, so
+// a shell on the far end of an ssh connection handed Zharp a path it then read
+// off local disk. Two things are held down here at once: a foreign host has to
+// survive, and every spelling this Mac answers to has to stay local. The second
+// is the one with teeth, because the injected shell hooks report gethostname(),
+// and on a machine named by DHCP that is not the name Foundation gives back.
+
+/// What zsh's $HOST, bash's $HOSTNAME and fish's `hostname` all put in the URI.
+func reportedHostName() -> String {
+    var buffer = [CChar](repeating: 0, count: 256)
+    guard gethostname(&buffer, buffer.count - 1) == 0 else { return "localhost" }
+    return String(cString: buffer)
+}
+
+/// "foo.local" and "foo" are the same Mac.
+func withoutDotLocal(_ name: String) -> String {
+    name.hasSuffix(".local") ? String(name.dropLast(6)) : name
+}
+
+do {
+    let e = newEmu()
+    var reports = 0
+    e.workingDirectoryChanged = { _ in reports += 1 }
+
+    func osc7(_ uri: String) { feed(e, "\u{1b}]7;\(uri)\u{1b}\\") }
+    func host() -> String { e.workingDirectoryHost ?? "nil" }
+    func path() -> String { e.workingDirectory ?? "nil" }
+
+    // Every value that means "here". A miss on any of these marks an ordinary
+    // local tab as remote, which costs the tab subtitle, the changes panel and
+    // history for every session: worse than the bug the host field fixes.
+    let bare = withoutDotLocal(ProcessInfo.processInfo.hostName)
+    let spellings = [
+        "",                               // file:///path, the scheme's own "here"
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "[::1]",                          // as an IPv6 literal is written in a URI
+        reportedHostName(),               // what the shell hooks actually emit
+        ProcessInfo.processInfo.hostName, // what Foundation answers
+        bare,                             // the bare name
+        bare + ".local",                  // and its mDNS spelling
+        bare.uppercased(),                // one machine, whatever the case
+    ]
+    for (i, name) in spellings.enumerated() {
+        osc7("file://\(name)/Users/test/local\(i)")
+        check(path() == "/Users/test/local\(i)" && e.workingDirectoryHost == nil,
+              "OSC 7 host '\(name)' is this machine (got host '\(host())')")
+    }
+
+    // A machine that is not this one. The host survives and the path is left in
+    // the far end's own notation, which is what lets the app layer tell a
+    // remote repository from a local one sitting at the same path.
+    osc7("file://srv1/home/me/app")
+    check(path() == "/home/me/app" && host() == "srv1",
+          "a foreign host is remote and preserved (got '\(host())')")
+
+    let quiet = reports
+    osc7("file://srv1/home/me/app")
+    check(reports == quiet, "the same machine and path is reported once")
+
+    // The exact shape of the bug: two checkouts at /home/me/app on two servers.
+    // Comparing paths alone says nothing moved.
+    osc7("file://srv2/home/me/app")
+    check(reports == quiet + 1 && host() == "srv2",
+          "a change of machine at the same path is a move")
+
+    osc7("file://srv1/home/me/Some%20Dir")
+    check(path() == "/home/me/Some Dir" && host() == "srv1",
+          "a remote path is percent decoded (got '\(path())')")
+
+    // The host gets a decode of its own now that it is kept; it never had one
+    // while it was being dropped. %2D is '-'.
+    osc7("file://srv%2Done/home/me")
+    check(host() == "srv-one", "the host half is percent decoded too (got '\(host())')")
+
+    // Split first, decode after: an escaped slash belongs to the filename and
+    // must not be promoted into the separator that ends the host.
+    osc7("file://srv1/home/me%2Fmine")
+    check(host() == "srv1" && path() == "/home/me/mine",
+          "an escaped slash does not end the host (got '\(host())' '\(path())')")
+
+    // A backslash is an ordinary character in a POSIX filename, so the remote
+    // branch trims "/" and nothing else.
+    osc7("file://srv1/home/me/odd%5C")
+    check(path() == "/home/me/odd\\",
+          "a trailing backslash survives a remote path (got '\(path())')")
+    osc7("file://srv1/home/me/dir/")
+    check(path() == "/home/me/dir", "a remote trailing slash is trimmed (got '\(path())')")
+    osc7("file://srv1/")
+    check(path() == "/" && host() == "srv1", "the remote filesystem root is preserved")
+
+    osc7("file://\(reportedHostName())/Users/test/back")
+    check(path() == "/Users/test/back" && e.workingDirectoryHost == nil,
+          "OSC 7 from this machine clears a stale host")
+
+    // OSC 9;9 has no host field at all, so it can only ever describe this
+    // machine, and it clears a stale one rather than leaving it standing.
+    osc7("file://srv1/home/me/app")
+    feed(e, "\u{1b}]9;9;/Users/test/here\u{7}")
+    check(path() == "/Users/test/here" && e.workingDirectoryHost == nil,
+          "OSC 9;9 always describes this machine")
+
+    // Nothing below should throw or run off the end of the string, and none of
+    // it names a directory, so the last good answer stands.
+    for bad in ["", "file", "not-a-uri", "file:/Users/test", "file://", "file://srv1"] {
+        osc7(bad)
+    }
+    check(path() == "/Users/test/here" && e.workingDirectoryHost == nil,
+          "a file URI with no path is ignored rather than fatal (got '\(path())')")
+
+    // An escape that is not valid percent encoding is handed over as it stands
+    // rather than dropping the report: what the shell said is still the best
+    // answer available, and refusing it would leave the panel on the last one.
+    osc7("file://srv1/home/%zz")
+    check(path() == "/home/%zz" && host() == "srv1",
+          "an undecodable escape falls back to the raw text (got '\(path())')")
 }
 
 // --- prompt marks (block rendering) --------------------------------
@@ -827,6 +966,330 @@ do {
         check(rowText(e, 0) == "24 100", "pty: resize reaches the child (got '\(rowText(e, 0))')")
     } catch {
         check(false, "pty: resize test could not start a shell")
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Sessions on another machine: which machine a session is on, what may be
+// dialled, and the ssh transport itself. See docs/remote-sessions.md.
+// ---------------------------------------------------------------------------
+
+do {
+    // ---- SshTarget.parse, the accepted shapes
+    check(SshTarget.parse("ssh srv1")?.label == "srv1", "ssh: a bare destination")
+    check(SshTarget.parse("ssh claudiu@10.0.0.4")?.label == "10.0.0.4",
+          "ssh: user@host keeps only the host")
+    check(SshTarget.parse("ssh ssh://me@box:2222")?.label == "box", "ssh: a URL destination")
+    check(SshTarget.parse("ssh ssh://me@box:2222")?.invocation?.port == 2222, "ssh: and its port")
+    check(SshTarget.parse("ssh ssh://me@box:2222")?.invocation?.user == "me", "ssh: and its user")
+    check(SshTarget.parse("ssh ssh://me@box:2222")?.invocation?.destination == "ssh://me@box:2222",
+          "ssh: the destination goes on the wire as typed")
+
+    let ported = SshTarget.parse("ssh -p 2222 srv1")
+    check(ported?.label == "srv1", "ssh: a flag value is not mistaken for the destination")
+    check(ported?.invocation?.arguments == ["-p", "2222", "srv1"], "ssh: and the port is carried over")
+    check(ported?.invocation?.port == 2222, "ssh: structured port")
+    check(SshTarget.parse("ssh -p2222 srv1")?.label == "srv1", "ssh: a glued flag value")
+    check(SshTarget.parse("ssh -p2222 srv1")?.invocation?.arguments == ["-p", "2222", "srv1"],
+          "ssh: glued, split out")
+
+    let clustered = SshTarget.parse("ssh -46C srv1")
+    check(clustered?.invocation?.arguments == ["-4", "-6", "-C", "srv1"],
+          "ssh: clustered flags carry over")
+
+    let keyed = SshTarget.parse("ssh -i \"/Users/me/My Keys/id_ed25519\" -J bastion srv1")
+    check(keyed?.invocation?.arguments == ["-i", "/Users/me/My Keys/id_ed25519", "-J", "bastion", "srv1"],
+          "ssh: an identity and a jump host reach the same place")
+    check(keyed?.invocation?.identityFile == "/Users/me/My Keys/id_ed25519", "ssh: identity field")
+    check(keyed?.invocation?.jumpHost == "bastion", "ssh: jump field")
+
+    let escaped = SshTarget.parse("ssh -i ~/my\\ keys/id srv1")
+    check(escaped?.label == "srv1", "ssh: a backslash escaped space is one argument")
+    check(escaped?.invocation?.arguments == ["-i", "~/my keys/id", "srv1"], "ssh: and is unescaped once")
+
+    let forwarded = SshTarget.parse("ssh -L 8080:localhost:80 srv1")
+    check(forwarded?.invocation?.arguments == ["srv1"], "ssh: a port forward is consumed and dropped")
+    check(SshTarget.parse("ssh srv1 uptime")?.invocation?.arguments == ["srv1"],
+          "ssh: a trailing command is dropped")
+    check(SshTarget.parse("ssh -- srv1")?.label == "srv1", "ssh: -- names the destination")
+    check(SshTarget.parse("ssh -l bob srv1")?.invocation?.user == "bob", "ssh: -l supplies the user")
+    check(SshTarget.parse("ssh -l bob alice@srv1")?.invocation?.user == "alice",
+          "ssh: user@ wins over -l")
+    check(SshTarget.parse("/usr/bin/ssh srv1")?.label == "srv1", "ssh: a full path to ssh")
+    check(SshTarget.parse("ssh ::1")?.label == "::1", "ssh: a bare IPv6 literal")
+    check(SshTarget.parse("ssh [2001:db8::1]:2222")?.label == "2001:db8::1",
+          "ssh: a bracketed literal loses its brackets")
+    check(SshTarget.parse("ssh [2001:db8::1]:2222")?.invocation?.port == 2222,
+          "ssh: and keeps its port")
+    check(SshTarget.parse("ssh fe80::1%25en0") != nil, "ssh: a zone id survives")
+    check(SshTarget.parse("ssh user@domain.com@bastion")?.label == "bastion",
+          "ssh: an @ inside the user")
+    check(SshTarget.parse("ssh -J bastion,two.example srv1")?.invocation?.jumpHost
+            == "bastion,two.example",
+          "ssh: a jump chain is allowed when every hop is a destination")
+
+    // ---- SshTarget.parse, the refusals. Each of these would otherwise put a
+    // string of somebody else's choosing into an outbound connection.
+    check(SshTarget.parse("ssh-keygen -t ed25519") == nil, "ssh: ssh-keygen is not ssh")
+    check(SshTarget.parse("ssh-add ~/.ssh/id_ed25519") == nil, "ssh: ssh-add is not ssh")
+    check(SshTarget.parse("git status") == nil, "ssh: and neither is anything else")
+    check(SshTarget.parse("ssh") == nil, "ssh: ssh with no destination goes nowhere")
+    check(SshTarget.parse("sudo ssh srv1") == nil, "ssh: a wrapper is not unwrapped")
+    check(SshTarget.parse("ssh -N -L 9000:localhost:9000 srv1") == nil,
+          "ssh: a tunnel is not a session")
+    check(SshTarget.parse("ssh -O exit srv1") == nil, "ssh: a control command is not a session")
+    check(SshTarget.parse("ssh -W host:22 srv1") == nil, "ssh: a stdio forward is not a session")
+    check(SshTarget.parse("ssh -f srv1 cmd") == nil, "ssh: backgrounding is not a session")
+    check(SshTarget.parse("ssh -p") == nil, "ssh: a value flag with no value")
+    check(SshTarget.parse("ssh --") == nil, "ssh: -- with nothing after it")
+    check(SshTarget.parse("ssh -- -oProxyCommand=curl") == nil,
+          "ssh: an option is never a destination")
+    check(SshTarget.parse("ssh -") == nil, "ssh: a lone dash is not a machine")
+    check(SshTarget.parse("ssh \"my host\"") == nil, "ssh: a hostname has no spaces in it")
+    check(SshTarget.parse("ssh 'a; rm -rf /'") == nil, "ssh: nor a semicolon")
+    check(SshTarget.parse("ssh '$(id)@srv1'") == nil, "ssh: a command substitution is not a user")
+    check(SshTarget.parse("ssh 'srv1`id`'") == nil, "ssh: nor a backtick a host")
+    check(SshTarget.parse("ssh me@") == nil, "ssh: an empty host")
+    check(SshTarget.parse("ssh keys/id") == nil, "ssh: a path is not a host")
+    check(SshTarget.parse("ssh -J '-x' srv1") == nil, "ssh: a jump hop that is an option")
+    check(SshTarget.parse("ssh -l 'a;b' srv1") == nil, "ssh: a login name that is not one")
+    check(SshTarget.parse("ssh -p '$(id)' srv1") == nil, "ssh: a port that is not a number")
+    check(SshTarget.parse("ssh -p 2222x srv1") == nil, "ssh: nor one with a tail on it")
+
+    // ---- what a carried command line may put on Zharp's own ssh line.
+    //
+    // Everything below is an option ssh would obey and that runs a program, or
+    // loads one, or decides whether an unknown host key stops the connection.
+    // Zharp opens this connection by itself, on a timer, so none of them may
+    // travel: the argv is spliced verbatim into a child process.
+    func carried(_ command: String) -> [String] {
+        SshTarget.parse(command)?.invocation?.arguments ?? []
+    }
+    check(carried("ssh -o ProxyCommand=/tmp/evil.sh srv1") == ["srv1"],
+          "carry: a ProxyCommand is dropped, not carried")
+    check(carried("ssh -oProxyCommand=id>/tmp/x srv1") == ["srv1"],
+          "carry: including glued to the flag")
+    check(carried("ssh -o proxycommand=id srv1") == ["srv1"],
+          "carry: keywords are case insensitive")
+    check(carried("ssh -o 'ProxyCommand /tmp/evil.sh' srv1") == ["srv1"],
+          "carry: and written with a space instead of an =")
+    check(carried("ssh -o LocalCommand=/tmp/evil.sh -o PermitLocalCommand=yes srv1") == ["srv1"],
+          "carry: nor a LocalCommand")
+    check(carried("ssh -o KnownHostsCommand=/tmp/evil.sh srv1") == ["srv1"],
+          "carry: nor a KnownHostsCommand")
+    check(carried("ssh -o PKCS11Provider=/tmp/evil.dylib srv1") == ["srv1"],
+          "carry: nor a library to dlopen")
+    check(carried("ssh -o StrictHostKeyChecking=no srv1") == ["srv1"],
+          "carry: nor anything that stops an unknown key being an error")
+    check(carried("ssh -o UserKnownHostsFile=/tmp/theirs srv1") == ["srv1"],
+          "carry: nor a known_hosts of somebody else's choosing")
+    check(carried("ssh -o Include=/tmp/evil srv1") == ["srv1"],
+          "carry: nor a file of further options")
+    check(carried("ssh -F /tmp/evil_config srv1") == ["srv1"],
+          "carry: -F is a file of further options with a flag of its own")
+    check(carried("ssh -I /tmp/evil.dylib srv1") == ["srv1"],
+          "carry: -I is a shared library ssh loads")
+    check(carried("ssh -o HostName=$(id) srv1") == ["srv1"],
+          "carry: nor a HostName, which ssh expands into %h")
+    check(carried("ssh -o User=$(id) srv1") == ["srv1"],
+          "carry: nor a User, which it expands into %r")
+    // And the ones that are the whole point of carrying anything.
+    check(carried("ssh -p 2222 -l bob -i ~/.ssh/id_ed25519 srv1")
+            == ["-p", "2222", "-l", "bob", "-i", "~/.ssh/id_ed25519", "srv1"],
+          "carry: how to reach it and who to be still travels")
+    check(carried("ssh -o IdentitiesOnly=yes -o Compression=yes srv1")
+            == ["-o", "IdentitiesOnly=yes", "-o", "Compression=yes", "srv1"],
+          "carry: and a -o that cannot run anything")
+    check(carried("ssh -4 -C -J bastion srv1") == ["-4", "-C", "-J", "bastion", "srv1"],
+          "carry: as do the plain flags and a checked jump host")
+
+    // ---- watched against reported: the whole security boundary
+    let watched = SshTarget.parse("ssh srv1")!
+    check(watched.canConnect, "reach: one the user reached is dialable")
+    check(watched.invocation != nil, "reach: and carries an invocation")
+    check(RemoteHost.reported("srv1")?.canConnect == false,
+          "reach: a machine we only heard about is not")
+    check(RemoteHost.reported("srv1")?.invocation == nil, "reach: and has nothing to dial with")
+    check(RemoteHost.reported("srv1") != watched,
+          "reach: and is not the same host as the dialable one")
+    check(RemoteHost.reported("-oProxyCommand=x") == nil,
+          "reach: a reported name that is an option is refused")
+    check(RemoteHost.reported("srv1; id") == nil,
+          "reach: a reported name with a metacharacter is refused")
+    check(RemoteHost.reported("  srv1  ")?.label == "srv1", "reach: a reported name is trimmed")
+    check(SshTarget.parse("ssh srv1") == SshTarget.parse("ssh srv1"),
+          "reach: same command, same host")
+    check(SshTarget.parse("ssh srv1") != SshTarget.parse("ssh -p 2222 srv1"),
+          "reach: the same name on a different port is a different machine")
+    check(RemoteHost.reported("a") != RemoteHost.reported("b"),
+          "reach: two reported machines stay distinct")
+    check(RemoteHost.reported("srv1")!.key != watched.key,
+          "reach: and do not share a connection key")
+
+    // ---- SessionLocation
+    check(SessionLocation.local("  ") == nil, "location: blank is not a directory")
+    check(SessionLocation.local("/Users/me")?.isRemote == false, "location: local is local")
+    check(SessionLocation.on(watched, path: nil).hasPath == false,
+          "location: a host with nowhere to stand")
+    check(SessionLocation.on(watched, path: "/home/me") != SessionLocation.local("/home/me"),
+          "location: the same path on another machine is another place")
+    check(SessionLocation.local("/Users/Work") == SessionLocation.local("/users/work"),
+          "location: this machine is case insensitive")
+    check(SessionLocation.on(watched, path: "/A") != SessionLocation.on(watched, path: "/a"),
+          "location: the far end is case sensitive even though this one is not")
+    check(SessionLocation.on(watched, path: "/home/me/app").displayName == "app",
+          "location: the last segment")
+    check(SessionLocation.on(watched, path: "/home/me").withPath("/tmp").remote == watched,
+          "location: a new directory does not change the machine")
+
+    // ---- PromptTitle, the fallback that is never a promotion
+    check(PromptTitle.parse("claudiu@srv1: ~/work/proj")?.host == "srv1",
+          "title: the default Debian title")
+    check(PromptTitle.parse("claudiu@srv1: ~/work/proj")?.path == "~/work/proj", "title: and its path")
+    check(PromptTitle.parse("srv1:/var/www")?.path == "/var/www",
+          "title: a bare host and an absolute path")
+    check(PromptTitle.parse("make: *** [all] Error 1") == nil,
+          "title: an error message is not a location")
+    check(PromptTitle.parse("nvim") == nil, "title: a program name is not a location")
+    check(PromptTitle.parse("Zharp") == nil, "title: and neither is ours")
+    check(PromptTitle.parse("weird host: ~/x") == nil, "title: a hostname has no spaces in it")
+    check(PromptTitle.parse(nil) == nil, "title: no title at all")
+
+    // ---- PosixPath: the far end's arithmetic, never this machine's
+    check(PosixPath.fileName("/home/me/app/main.ts") == "main.ts", "posix: the last segment")
+    check(PosixPath.fileName("/home/me/app/") == "app", "posix: a trailing slash is not a segment")
+    check(PosixPath.fileName("/") == "/", "posix: the root keeps its slash")
+    check(PosixPath.relative("/home/me/app/src/x.ts", under: "/home/me/app") == "src/x.ts",
+          "posix: the part below")
+    check(PosixPath.relative("/home/me/other/x.ts", under: "/home/me/app") == nil,
+          "posix: a sibling is not under it")
+    check(PosixPath.relative("/home/me/application/x.ts", under: "/home/me/app") == nil,
+          "posix: a longer name is not under it")
+    check(PosixPath.relative("/home/me/App/x.ts", under: "/home/me/app") == nil,
+          "posix: and neither is another case")
+    check(PosixPath.combine("/home/me/", "/app") == "/home/me/app", "posix: one slash between them")
+    check(PosixPath.expandHome("~/work", home: "/home/me") == "/home/me/work",
+          "posix: ~ becomes the home directory")
+    check(PosixPath.expandHome("~", home: "/home/me") == "/home/me", "posix: ~ on its own")
+    check(PosixPath.expandHome("~other/work", home: "/home/me") == "~other/work",
+          "posix: another user's home is left alone")
+    check(PosixPath.expandHome("/var/www", home: "/home/me") == "/var/www",
+          "posix: an absolute path is left alone")
+
+    // ---- ShellWords: every argument that goes over the wire passes through this
+    check(ShellWords.quote("plain") == "'plain'", "quote: ordinary text")
+    check(ShellWords.quote("it's") == "'it'\\''s'", "quote: a quote is closed, escaped and reopened")
+    check(ShellWords.quote("a; rm -rf /") == "'a; rm -rf /'", "quote: a semicolon stays data")
+
+    // Which names mean "this machine" is decided in TerminalEmulator, against
+    // the OSC 7 host, and it is checked there: see the "which machine the
+    // directory is on" section above, which walks every spelling this Mac
+    // answers to. There is deliberately no second definition of it here for a
+    // caller to reach for by mistake.
+}
+
+// ---------------------------------------------------------------------------
+// The ssh transport, run for real against a stub that is a local shell.
+//
+// ZHARP_SSH names the program SshGitChannel runs instead of ssh, so this
+// replaces the network with a pipe and leaves everything above it untouched:
+// the handshake, the marker framing, the single quoting, the base64 and the
+// git hardening are all exercised exactly as they would be against a server.
+// There is no ssh server on a build machine, and a test that mocked the
+// channel would prove nothing about the part that actually breaks.
+// ---------------------------------------------------------------------------
+
+do {
+    let stub = URL(fileURLWithPath: #filePath)      // .../Tests/<target>/main.swift
+        .deletingLastPathComponent()                // .../Tests/<target>
+        .deletingLastPathComponent()                // .../Tests
+        .appendingPathComponent("Fixtures/ssh-stub.sh")
+
+    if !FileManager.default.isExecutableFile(atPath: stub.path)
+        || !FileManager.default.isExecutableFile(atPath: "/bin/sh") {
+        // A skip rather than a failure: this section needs a POSIX shell and
+        // its fixture, and neither says anything about the code under test.
+        print("SKIP  ssh transport: no /bin/sh or no executable stub at \(stub.path)")
+    } else {
+        setenv("ZHARP_SSH", stub.path, 1)
+        defer { unsetenv("ZHARP_SSH") }
+
+        let here = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().path  // the repo root
+
+        let host = SshTarget.parse("ssh -p 2222 me@srv1")!
+        let channel = awaitValue { await SshGitChannel.connect(to: host) }
+        check(channel.isUsable, "transport: the handshake completes (\(channel.problem ?? "ok"))")
+        check(channel.home == NSHomeDirectory(),
+              "transport: $HOME comes back from the far end (\(channel.home ?? "-"))")
+
+        // A real read of a real repository, through the whole frame.
+        let root = awaitValue {
+            await channel.runGit(in: here, ["rev-parse", "--show-toplevel"])
+        }.trimmingCharacters(in: .whitespacesAndNewlines)
+        check(root.hasSuffix("/zharp") || root == here,
+              "transport: git rev-parse answers through the channel (\(root))")
+
+        // NUL separators are the reason for the base64: a filename may contain
+        // both a newline and a NUL byte, so a line-oriented protocol reading
+        // raw output would eventually mistake a filename for an end of frame.
+        let status = awaitValue {
+            await channel.runGit(in: here,
+                                 ["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+        }
+        check(!status.contains("\n") || status.contains("\0"),
+              "transport: -z output survives the frame with its NUL bytes")
+
+        // The quoting, with everything a shell would otherwise act on.
+        let hostile = "a; rm -rf / $HOME `id` 'x' *"
+        let echoed = awaitValue { await channel.run(in: here, ["printf", "%s", hostile]) }
+        check(echoed == hostile, "transport: an argument arrives literally (\(echoed))")
+
+        // A frame that contains the marker's own text must not end early.
+        let marker = awaitValue {
+            await channel.run(in: here, ["printf", "one\nZHARP-END-deadbeef\nthree\n"])
+        }
+        check(marker == "one\nZHARP-END-deadbeef\nthree\n",
+              "transport: the marker's text inside a payload does not end the frame")
+
+        // It never writes. The subcommand allowlist is what makes that true of
+        // a caller this file never sees.
+        check(awaitValue { await channel.runGit(in: here, ["fetch", "--all"]) }.isEmpty,
+              "transport: a writing subcommand is refused")
+        check(awaitValue { await channel.runGit(in: here, ["checkout", "main"]) }.isEmpty,
+              "transport: and so is checkout")
+
+        // Missing directory, missing command, silent command: all one answer.
+        check(awaitValue { await channel.run(in: "/no/such/dir", ["pwd"]) }.isEmpty,
+              "transport: a directory that is not there answers empty")
+        check(awaitValue { await channel.run(in: here, ["zharp-not-a-command"]) }.isEmpty,
+              "transport: and so does a command that is not there")
+
+        channel.dispose()
+        check(!channel.isUsable, "transport: a disposed channel stops being usable")
+
+        // The rule the whole feature rests on, at the two places it is enforced.
+        let reported = RemoteHost.reported("srv1")!
+        let refused = awaitValue { await SshGitChannel.connect(to: reported) }
+        check(!refused.isUsable, "transport: a host we only heard about is never dialled")
+        check(refused.problem?.contains("did not see the ssh command") == true,
+              "transport: and says why (\(refused.problem ?? "-"))")
+        check(awaitValue { await SshGitChannels.channel(for: reported) } == nil,
+              "transport: the registry refuses it too")
+
+        // The off switch, which means now rather than in five minutes.
+        SshGitChannels.enabled = false
+        check(awaitValue { await SshGitChannels.channel(for: host) } == nil,
+              "transport: turned off, nothing connects")
+        SshGitChannels.enabled = true
+
+        // One channel per host, shared by every tab on it.
+        let first = awaitValue { await SshGitChannels.channel(for: host) }
+        let second = awaitValue { await SshGitChannels.channel(for: host) }
+        check(first != nil && first === second, "transport: one connection per host, not per question")
+        SshGitChannels.closeAll()
     }
 }
 

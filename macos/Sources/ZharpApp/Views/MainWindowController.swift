@@ -59,10 +59,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// The repository the title-bar counts describe. git answers off the main
     /// thread, so a reply that lands after the session has moved on has to be
     /// recognised and dropped.
-    private var totalsRepo: String?
-    /// The directory the button was last resolved for, so a working-directory
-    /// report that did not actually move does not run git again.
-    private var diffButtonCwd: String?
+    private var totalsRepo: SessionLocation?
+    /// Where the button was last resolved for, so a directory report that did
+    /// not actually move does not run git again.
+    private var diffButtonLocation: SessionLocation?
     private var diffTotals = (added: 0, removed: 0)
     private let sessionList = SessionListView()
     private let sessionStrip = SessionListView()
@@ -222,6 +222,22 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         if ProcessInfo.processInfo.environment["ZHARP_TEST_DIFF"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
                 self?.exerciseDiffForTesting()
+            }
+        }
+
+        // ZHARP_TEST_REMOTE=<command> types that command at the prompt, waits
+        // for the session to land on another machine, and reports the panel at
+        // each step: local, then remote, then local again once the command
+        // exits. The command is passed in rather than hard coded because there
+        // is no ssh server on a build machine: the tests hand it a program
+        // named ssh that behaves like a remote shell, and point ZHARP_SSH at
+        // the stub so the channel's own connection is a local shell too.
+        if let command = ProcessInfo.processInfo.environment["ZHARP_TEST_REMOTE"] {
+            // Later than the other hooks: this one types at the prompt, and a
+            // shell with a real rc file takes several seconds to draw its
+            // first one. Typing before it is there is a harness artifact.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                self?.exerciseRemoteForTesting(command)
             }
         }
 
@@ -1098,13 +1114,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     private var isDiffOpen: Bool { !diffPanel.isHidden }
 
-    /// The directory the panel and the button follow.
+    /// Where the panel and the button follow, machine included.
     ///
-    /// Deliberately no fallback to some other session's directory: with one,
-    /// the changes button turned up on the Settings page reporting a repository
-    /// the visible page has nothing to do with.
-    private func lastTerminalDirectory() -> String? {
-        active?.session?.workingDirectory
+    /// Deliberately no fallback to some other session's location: with one, the
+    /// changes button turned up on the Settings page reporting a repository the
+    /// visible page has nothing to do with.
+    private func lastTerminalLocation() -> SessionLocation? {
+        active?.session?.location
     }
 
     private func toggleDiff() {
@@ -1134,7 +1150,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         // Pointed at the directory BEFORE it is shown: unhiding is what starts
         // the panel's own refresh, and it should not spend its first tick
         // reading whatever repository it was left on.
-        diffPanel.setWorkingDirectory(lastTerminalDirectory(), force: true)
+        diffPanel.setLocation(lastTerminalLocation(), force: true)
         diffPanel.isHidden = false
         diffSplitter.isHidden = false
         diffButton.isHidden = false
@@ -1160,7 +1176,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             // activating one has to re-read even when the directory is the
             // same. Without it two sessions in one repository would leave the
             // previous tab's diff on screen until the next poll tick.
-            diffPanel.setWorkingDirectory(lastTerminalDirectory(), force: true)
+            diffPanel.setLocation(lastTerminalLocation(), force: true)
             return
         }
         openDiffPanel()
@@ -1210,9 +1226,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// a repository, is not them changing it. The panel says "not a git
     /// repository" for itself.
     private func updateDiffButton() {
-        let cwd = lastTerminalDirectory()
-        if (diffButtonCwd ?? "").caseInsensitiveCompare(cwd ?? "") == .orderedSame { return }
-        diffButtonCwd = cwd
+        let place = lastTerminalLocation()
+        if diffButtonLocation == place { return }
+        diffButtonLocation = place
 
         guard let active, !active.isSettings else {
             diffButton.isHidden = true
@@ -1222,18 +1238,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
 
         Task { @MainActor in
-            let repo = await GitStatus.discoverRepo(cwd)
+            let repo = await GitStatus.discoverRepo(place)
             // The prompt may have moved on while git was answering. Whoever
             // asked last owns the button.
-            guard (self.diffButtonCwd ?? "").caseInsensitiveCompare(cwd ?? "")
-                    == .orderedSame else { return }
+            guard self.diffButtonLocation == place else { return }
 
             // The button stays while the panel is open even outside a
             // repository, because hiding it would strand the panel with no way
             // to dismiss it.
             self.diffButton.isHidden = repo == nil && !self.isDiffOpen
             self.totalsRepo = repo
-            if self.isDiffOpen { self.diffPanel.setWorkingDirectory(cwd) }
+            if self.isDiffOpen { self.diffPanel.setLocation(place) }
 
             guard let repo else {
                 self.applyDiffTotals(0, 0)
@@ -1257,7 +1272,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// panel: the button is live whether or not the panel has ever been opened,
     /// so this has to work with nothing on screen.
     @MainActor
-    private func readDiffTotals(_ repo: String) async {
+    private func readDiffTotals(_ repo: SessionLocation) async {
         var added = 0
         var removed = 0
         for counts in await GitStatus.counts(repoRoot: repo).values {
@@ -1304,15 +1319,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// A session reports where it is and when it has finished a command, and
-    /// both change what the panel should be showing. OSC 7 and OSC 133 already
-    /// carry them, so nothing here polls.
+    /// both change what the panel should be showing. OSC 7, OSC 133 and the
+    /// `ssh` read off the prompt line already carry them, so nothing here
+    /// polls.
     ///
     /// Everything here is window scoped, which is why it is re-pointed by
     /// `adopt` as well as set by `addTab`: a tab carries its shell between
     /// windows, and the panel, the badge and the Dock all belong to whichever
     /// window is holding it at the time.
     private func watchForChanges(_ item: SessionItem) {
-        item.directoryChanged = { [weak self, weak item] _ in
+        // The location rather than the directory: typing `ssh` changes which
+        // machine every question below is asked of, and it does so without the
+        // local directory moving at all.
+        item.locationChanged = { [weak self, weak item] _ in
             guard let self, let item, self.active === item else { return }
             self.updateDiffButton()
         }
@@ -1647,6 +1666,55 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
 
+    /// Sends a session to another machine and back, reporting the panel at each
+    /// step.
+    ///
+    /// The whole feature is a chain, and every link of it is somewhere else:
+    /// the prompt marks that make the typed command readable, the parse that
+    /// decides it may be dialled, the location that carries the machine with
+    /// the path, the routing in GitStatus, and the panel's own states. A unit
+    /// test of any one link would pass with the chain broken, which is what
+    /// makes driving a real session the only check worth having here.
+    private func exerciseRemoteForTesting(_ command: String) {
+        performShortcut("openDiff")
+
+        // Long waits on purpose. An ssh handshake, a shell starting on the far
+        // end and a git running there are all slower than anything else this
+        // window does, and a harness that reported before they finished would
+        // be measuring its own impatience.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self else { return }
+            self.reportRemoteStage("local")
+            self.typeForTesting(command + "\n")
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                guard let self else { return }
+                self.reportRemoteStage("remote")
+
+                // Coming home is the half that matters most: a session is local
+                // again when the LOCAL shell draws a fresh prompt, not when the
+                // far end says anything, so this is what proves the return path
+                // survives a remote that was cut off mid sentence.
+                self.typeForTesting("exit\n")
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                    self?.reportRemoteStage("home")
+                    App.log("TEST remote done")
+                }
+            }
+        }
+    }
+
+    private func reportRemoteStage(_ stage: String) {
+        let at = lastTerminalLocation()
+        App.log("TEST remote \(stage): panel=\(isDiffOpen) at=\(at?.description ?? "-") "
+                + "remote=\(at?.isRemote == true) "
+                + "host=\(at?.remote?.label ?? "-") "
+                + "canConnect=\(at?.remote?.canConnect == true) "
+                + "subtitle=\(active?.displaySubtitle ?? "-")")
+        App.log(diffPanel.debugState())
+    }
+
     /// Opens the changes panel the way the shortcut does, reports what it found,
     /// then proves the open state belongs to the session rather than the window:
     /// a new tab should not inherit it, and going back should restore it.
@@ -1654,7 +1722,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let opened = active
         performShortcut("openDiff")
         App.log("TEST diff open=\(isDiffOpen) width=\(diffWidth.constant) "
-                + "button=\(!diffButton.isHidden) cwd=\(lastTerminalDirectory() ?? "-")")
+                + "button=\(!diffButton.isHidden) at=\(lastTerminalLocation()?.description ?? "-")")
 
         // git runs off the main thread, so the panel has nothing to say yet.
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in

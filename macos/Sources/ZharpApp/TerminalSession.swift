@@ -24,8 +24,54 @@ final class TerminalSession {
     let sessionKey = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
 
     /// Shell-reported current directory; falls back to the start directory.
+    /// Always a path on THIS machine: see `location` for where the session
+    /// actually is once it has been sent somewhere over ssh.
     private(set) var workingDirectory: String?
     var isStarted: Bool { pty != nil }
+
+    /// Where this session is standing, machine included.
+    ///
+    /// `workingDirectory` only ever describes this computer, which stops being
+    /// true the moment the user types `ssh`. Anything that asks a question
+    /// about the directory, rather than only displaying it, has to ask this
+    /// instead: on macOS a remote POSIX path is a syntactically perfect local
+    /// one, so a path that has lost its machine reads whatever happens to be
+    /// there and says nothing about it.
+    /// Read under the same lock the writer holds. The pty reader thread sets
+    /// this and the main thread reads it on every tab switch and panel refresh,
+    /// and a torn read here is a session pointed at the wrong machine.
+    var location: SessionLocation? {
+        locationLock.lock()
+        defer { locationLock.unlock() }
+        return storedLocation
+    }
+
+    private var storedLocation: SessionLocation?
+
+    /// Raised when the session changes machine or directory. Raised on
+    /// whichever thread noticed: the pty reader for anything the shell said,
+    /// the main thread for a command typed at the prompt.
+    var locationChanged: ((SessionLocation?) -> Void)?
+
+    /// The machine an `ssh` typed at this prompt went to, until a prompt comes
+    /// back here. Zharp knows the command because it already reads the prompt
+    /// line for history, which is why this works on a plain server that reports
+    /// nothing about itself.
+    private var remote: RemoteHost?
+
+    /// Where the user is on `remote`, when anything over there has said so.
+    /// Empty is a normal state, not a failure: plenty of servers report no
+    /// directory at all.
+    private var remotePath = ""
+
+    /// The last machine name the far end reported through OSC 7. Kept so a
+    /// SECOND, different name can be noticed: see `noteRemoteDirectory`.
+    private var remoteName: String?
+
+    /// `remote`, `remotePath`, `remoteName` and `location` are written from the
+    /// pty reader thread (anything the shell said) and from the main thread
+    /// (Enter at the prompt), so the four move together under this.
+    private let locationLock = NSLock()
 
     /// When true, NO_COLOR is stripped from the child environment.
     var overrideNoColor = true
@@ -62,7 +108,6 @@ final class TerminalSession {
         for observer in observers { observer() }
     }
     var titleChanged: ((String) -> Void)?
-    var workingDirectoryChanged: ((String) -> Void)?
     var commandExecuted: ((String) -> Void)?
     var exited: ((Int32) -> Void)?
     var bell: (() -> Void)?
@@ -90,6 +135,7 @@ final class TerminalSession {
         self.arguments = arguments
         self.startDirectory = workingDirectory
         self.workingDirectory = workingDirectory
+        self.storedLocation = SessionLocation.local(workingDirectory)
         self.title = initialTitle
         emulator = TerminalEmulator(cols: 120, rows: 30, maxScrollback: max(100, scrollbackLines))
 
@@ -98,11 +144,30 @@ final class TerminalSession {
             if !title.trimmingCharacters(in: .whitespaces).isEmpty {
                 self.title = title
             }
+            self.noteTitle(self.title)
             self.titleChanged?(self.title)
         }
         emulator.workingDirectoryChanged = { [weak self] cwd in
-            self?.workingDirectory = cwd
-            self?.workingDirectoryChanged?(cwd)
+            guard let self else { return }
+
+            // Read straight off the emulator rather than from the argument:
+            // both halves of (machine, path) are settled before this fires,
+            // and the pair is what says where the session is.
+            if let host = self.emulator.workingDirectoryHost {
+                self.noteRemoteDirectory(host, cwd)
+                return
+            }
+
+            // A local report. It is also how a session comes home as far as the
+            // directory goes, but it is deliberately NOT how it stops being
+            // remote: see `leaveRemote`.
+            //
+            // There is no directory-only event to raise here on purpose. One
+            // used to exist and everything watched it, which is precisely why
+            // typing `ssh` changed nothing anyone could see: a path with no
+            // machine attached is not an answer to "where is this session".
+            self.workingDirectory = cwd
+            self.updateLocation()
         }
         emulator.responseRequested = { [weak self] sequence in
             self?.writeRaw(sequence)
@@ -111,6 +176,13 @@ final class TerminalSession {
             if ProcessInfo.processInfo.environment["ZHARP_DEBUG_HISTORY"] == "1" {
                 App.log("cmd[mark] '\(command)'")
             }
+            // History only. This fires when a prompt mark arrives, and a prompt
+            // mark is a byte sequence any program that writes to the terminal
+            // can produce: the output of `cat`, of `curl`, or of a shell on
+            // another machine. Text captured this way is therefore output, not
+            // input, and output must never choose a machine to connect to.
+            // `noteCommand` is called from `send` instead, where a person
+            // pressing Enter is what caused it.
             self?.commandExecuted?(command)
         }
         emulator.bellRang = { [weak self] in
@@ -120,8 +192,121 @@ final class TerminalSession {
             self?.agentReported?(payload)
         }
         emulator.promptReturned = { [weak self] in
+            // The LOCAL shell has drawn a new prompt, so whatever it was
+            // running, ssh included, has exited. This is the only signal that
+            // cannot be missed: a remote shell need not say goodbye, and the
+            // connection may have ended by the laptop lid closing.
+            self?.leaveRemote()
             self?.promptReturned?()
         }
+    }
+
+    // ---------------------------------------------------------------- location
+
+    /// Notices an `ssh` being run, from the command line the user typed.
+    ///
+    /// This is the only one of the three signals that needs nothing at all from
+    /// the far end, and the only one Zharp will ever connect on: it was read at
+    /// a local prompt, before anything was sent. `SshTarget.parse` is the sole
+    /// producer of the argument list a second connection is built from, so a
+    /// name that arrived over the wire cannot get here.
+    ///
+    /// Called from `send` alone, on Enter. Deliberately NOT from the
+    /// emulator's own command-finished callback: that one fires on a prompt
+    /// mark, and a prompt mark is a byte sequence, so a program printing
+    /// OSC 133 could hand this whatever command line it liked and choose where
+    /// Zharp connects. Enter is the one signal a person has to supply.
+    private func noteCommand(_ command: String) {
+        guard let host = SshTarget.parse(command) else { return }
+        locationLock.lock()
+        remote = host
+        remotePath = ""
+        remoteName = nil
+        locationLock.unlock()
+        updateLocation()
+    }
+
+    /// Takes an OSC 7 report from a shell that says it is on another machine.
+    ///
+    /// The name is only ever used to SAY where the session is. `RemoteHost` has
+    /// no way to turn one into a connection: only the `.watched` case carries
+    /// an argument list, and only `SshTarget.parse` produces one.
+    ///
+    /// A name that is not a machine name drops the whole report rather than
+    /// falling back to treating the path as local. That fallback is the
+    /// original bug, and it is worse here than on Windows: /home/me/app off a
+    /// Linux box is a perfectly ordinary path on a Mac, so the panel would read
+    /// whatever is at that path locally and present it as the server's.
+    private func noteRemoteDirectory(_ host: String, _ path: String) {
+        guard let reported = RemoteHost.reported(host) else { return }
+
+        locationLock.lock()
+        if let seen = remoteName, seen.caseInsensitiveCompare(reported.label) != .orderedSame {
+            // A SECOND, different name on the same connection means the machine
+            // underneath changed without Zharp watching an ssh: an `ssh` typed
+            // at the remote prompt, which the prompt marks over here cannot
+            // see. Whatever invocation was being held reaches the first hop,
+            // not this one, so reading git through it would show a different
+            // computer's repository under this computer's name, which is the
+            // failure this whole feature exists to end. Demote to the name
+            // alone, which can be shown and cannot be dialled.
+            //
+            // Not re-promoted when the user exits back to the first hop. The
+            // cost is a panel that names the machine and stops until they log
+            // in again; the alternative is guessing, and guessing here means
+            // logging in to the wrong server.
+            remote = reported
+        } else if remote == nil {
+            remote = reported
+        }
+        // Otherwise the machine Zharp watched us reach is the machine that just
+        // introduced itself, under whichever spelling. The watched host is kept
+        // because it is the one carrying an invocation, and because its label is
+        // what the user typed and therefore what they will recognise.
+        remoteName = reported.label
+        remotePath = path
+        locationLock.unlock()
+        updateLocation()
+    }
+
+    /// Takes the directory out of a remote shell's window title.
+    ///
+    /// Only consulted while the session is already known to be elsewhere, and
+    /// only for the path. A title is a string any program can set to anything,
+    /// so it is a hint about a machine already established, never the thing
+    /// that establishes one, and never a reason to change machine.
+    private func noteTitle(_ title: String) {
+        locationLock.lock()
+        let elsewhere = remote != nil
+        locationLock.unlock()
+        guard elsewhere, let parsed = PromptTitle.parse(title) else { return }
+
+        locationLock.lock()
+        let moved = parsed.path != remotePath
+        if moved { remotePath = parsed.path }
+        locationLock.unlock()
+        if moved { updateLocation() }
+    }
+
+    /// The session is on this machine again.
+    private func leaveRemote() {
+        locationLock.lock()
+        let wasRemote = remote != nil
+        remote = nil
+        remotePath = ""
+        remoteName = nil
+        locationLock.unlock()
+        if wasRemote { updateLocation() }
+    }
+
+    private func updateLocation() {
+        locationLock.lock()
+        let next = remote.map { SessionLocation.on($0, path: remotePath) }
+            ?? SessionLocation.local(workingDirectory)
+        let moved = next != storedLocation
+        if moved { storedLocation = next }
+        locationLock.unlock()
+        if moved { locationChanged?(next) }
     }
 
     func ensureStarted(cols: Int, rows: Int) {
@@ -215,15 +400,19 @@ final class TerminalSession {
     func send(_ text: String) {
         // Enter executes whatever is typed at the prompt: capture it NOW.
         // Waiting for the next prompt mark loses commands that clear the
-        // screen (clear, cls) before it arrives.
-        if commandExecuted != nil, text.contains("\r") {
+        // screen (clear, cls) before it arrives, and for `ssh` it would mean
+        // learning where the session went only once it had come back.
+        if commandExecuted != nil || locationChanged != nil, text.contains("\r") {
             emulator.syncRoot.lock()
             let pending = emulator.peekPendingCommand()
             emulator.syncRoot.unlock()
             if ProcessInfo.processInfo.environment["ZHARP_DEBUG_HISTORY"] == "1" {
                 App.log("cmd[enter] pending='\(pending ?? "<nil>")'")
             }
-            if let pending { commandExecuted?(pending) }
+            if let pending {
+                noteCommand(pending)
+                commandExecuted?(pending)
+            }
         }
         userTyped?()
         writeRaw(text)
