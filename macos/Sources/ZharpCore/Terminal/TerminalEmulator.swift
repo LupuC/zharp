@@ -103,6 +103,19 @@ public final class TerminalEmulator {
     /// end of its soft-wrap chain). Not raised for empty prompts.
     public var commandExecuted: ((String) -> Void)?
 
+    /// Raised when the shell draws a fresh prompt below the last one, so
+    /// whatever was running in the foreground has exited.
+    ///
+    /// This is the only completely reliable way to know an agent is gone. An
+    /// agent's own "session ended" hook fires while its process is tearing
+    /// itself down, which is the worst possible moment to be asking it to write
+    /// to the terminal, and a report that never arrives leaves a tab claiming
+    /// to be busy forever. A prompt coming back cannot be missed, and it works
+    /// just as well for the agents that report nothing at all.
+    ///
+    /// Single subscriber, like the callbacks around it.
+    public var promptReturned: (() -> Void)?
+
     private var promptEndMarksRaw: [(line: Int64, col: Int)] = []
 
     private func recordPromptMark() {
@@ -110,7 +123,9 @@ public final class TerminalEmulator {
 
         // A genuinely NEW prompt below the last one means the previous block
         // just finished - report the command that ran in it.
-        if let prevMark = promptMarksRaw.last, raw > prevMark, commandExecuted != nil {
+        let freshPrompt = (promptMarksRaw.last.map { raw > $0 }) ?? false
+
+        if freshPrompt, let prevMark = promptMarksRaw.last, commandExecuted != nil {
             for i in stride(from: promptEndMarksRaw.count - 1, through: 0, by: -1) {
                 let (line, col) = promptEndMarksRaw[i]
                 if line >= prevMark && line < raw {
@@ -134,6 +149,11 @@ public final class TerminalEmulator {
         promptMarksRaw.append(raw)
         if promptMarksRaw.count > 256 {
             promptMarksRaw.removeFirst()
+        }
+
+        // After the bookkeeping, so anyone listening sees settled state.
+        if freshPrompt {
+            promptReturned?()
         }
     }
 
@@ -261,6 +281,20 @@ public final class TerminalEmulator {
     public var workingDirectoryChanged: ((String) -> Void)?
     public var responseRequested: ((String) -> Void)?
     public var bellRang: (() -> Void)?
+
+    /// An AI agent reporting its own state, as the raw JSON body of an
+    /// OSC 777 notification addressed to us. Zharp used to work this out by
+    /// reading the screen, which could see that an agent was busy but never
+    /// that it was waiting on you.
+    ///
+    /// The body is handed over unparsed and unvalidated: it comes from a script
+    /// running in the user's shell, so whoever subscribes treats it as hostile
+    /// input that happens to have arrived over an escape sequence.
+    ///
+    /// Single subscriber, like the callbacks above: assigning twice replaces
+    /// rather than adds. Only the owning session subscribes, and anything else
+    /// that wants these should hang off it rather than off the emulator.
+    public var agentReported: ((String) -> Void)?
 
     public init(cols: Int, rows: Int, maxScrollback: Int = 10000) {
         self.cols = max(2, cols)
@@ -859,6 +893,26 @@ public final class TerminalEmulator {
         workingDirectoryChanged?(path)
     }
 
+    /// The OSC 777 verb and title an agent uses to address Zharp specifically.
+    private static let agentNotifyVerb = "notify;"
+    private static let agentNotifyTitle = "zharp://agent"
+
+    /// OSC 777;notify;<title>;<body>. Both the verb and the title have to match
+    /// exactly, case included: several terminals carry desktop notifications on
+    /// this sequence, so the title is the only thing separating an agent
+    /// talking to us from a notification that is somebody else's business.
+    ///
+    /// Only the first two separators are framing. A JSON body is full of
+    /// semicolons and colons and every one of them after the title belongs to
+    /// the body.
+    private func handleNotify(_ arg: String) {
+        guard arg.hasPrefix(Self.agentNotifyVerb) else { return }
+        let rest = arg.dropFirst(Self.agentNotifyVerb.count)
+        guard let sep = rest.firstIndex(of: ";") else { return }
+        guard rest[rest.startIndex..<sep] == Self.agentNotifyTitle else { return }
+        agentReported?(String(rest[rest.index(after: sep)...]))
+    }
+
     private static func parseFileUri(_ uri: String) -> String? {
         guard uri.lowercased().hasPrefix("file://") else { return nil }
         let rest = String(uri.dropFirst(7))
@@ -945,6 +999,12 @@ extension TerminalEmulator: VtHandler {
             } else if arg.lowercased().hasPrefix("b") {
                 recordPromptEnd()
             }
+        case 777:
+            // OSC 777;notify;<title>;<body> - the rxvt-unicode notification
+            // convention, which the AI coding agents have settled on for
+            // talking to their terminal. Only our own title is claimed;
+            // another program's notification is its business, not ours.
+            handleNotify(arg)
         default:
             break
         }

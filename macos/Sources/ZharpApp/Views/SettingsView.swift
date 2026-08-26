@@ -31,6 +31,7 @@ final class SettingsView: ChromeView {
     private var showSearchToggle: ActionSwitch!
     private var cursorCombo: ActionPopUpButton!
     private var scrollbackBox: NumberBox!
+    private var agentAlertToggle: ActionSwitch!
     private var fontSizeBox: NumberBox!
     private var shellCombo: ActionPopUpButton!
     private var noColorToggle: ActionSwitch!
@@ -157,6 +158,7 @@ final class SettingsView: ChromeView {
                                ? 1 : (AppSettings.cursorStyleToCode(settings.cursorStyle) == 5 ? 2 : 0))
         fontSizeBox.setValue(settings.fontSize)
         scrollbackBox.setValue(Double(settings.scrollbackLines))
+        agentAlertToggle.state = settings.agentNotifications ? .on : .off
         inputPositionGrid.setSelection(AppSettings.inputPositionToCode(settings.inputPosition))
         noColorToggle.state = settings.overrideNoColor ? .on : .off
         restoreToggle.state = settings.restoreSessions ? .on : .off
@@ -413,10 +415,20 @@ final class SettingsView: ChromeView {
                                       max: 200000, step: 1000, width: 160) { [weak self] value in
             self?.apply { self?.settings.scrollbackLines = Int(value) }
         }
+
+        agentAlertToggle = toggle(settings.agentNotifications) { [weak self] on in
+            self?.apply { self?.settings.agentNotifications = on }
+        }
+
         add(p, [
             sectionHeader("History", first: true),
             row("Scrollback lines", "History kept per session. Applies to new sessions.",
                 scrollbackBox),
+            divider(),
+            sectionHeader("Notifications"),
+            row("When an AI agent needs you",
+                "Desktop notification and a bouncing Dock icon while Zharp is not the app in front. Click it to jump to the session. The tab always shows it either way.",
+                agentAlertToggle),
             divider(),
         ])
         return p

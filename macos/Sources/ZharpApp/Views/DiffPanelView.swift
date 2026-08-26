@@ -418,6 +418,9 @@ final class DiffPanelView: ChromeView {
         if moved {
             setTotals(0, 0)
             repoRoot = nil
+            // Whatever was being followed belonged to the repository we are
+            // leaving, so it cannot be found in the one we are arriving at.
+            following = nil
             repoLabel.stringValue = ""
             branchLabel.stringValue = ""
             showEmpty("Reading changes", "Looking at \(shortName(cwd)).")
@@ -513,6 +516,10 @@ final class DiffPanelView: ChromeView {
 
             self.hideEmpty()
             if !sameFiles { self.adoptChanges(fresh) }
+
+            // After the rows exist, and before the diff is read, so the read
+            // below is the followed file's rather than a second one.
+            self.selectFollowed()
 
             // Unlike Windows, the open file is re-read on every tick. Nothing
             // else notices an edit to the file already on screen, so without
@@ -651,6 +658,64 @@ final class DiffPanelView: ChromeView {
         totalAdded = added
         totalRemoved = removed
         onTotalsChanged?(added, removed)
+    }
+
+    // ------------------------------------------------------------- following
+
+    /// The repository-relative path the panel is trying to land on, and how
+    /// many more reads it will wait for git to notice the write.
+    private var following: String?
+    private var followTries = 0
+
+    /// Points the panel at a file an agent has just written.
+    ///
+    /// The panel follows the agent around rather than the other way about: an
+    /// agent working through a task edits a handful of files over and over, and
+    /// watching the diff appear is the whole reason the panel is open beside
+    /// it.
+    func follow(_ absolutePath: String) {
+        guard let repo = repoRoot else { return }
+
+        let full = (absolutePath as NSString).standardizingPath
+        let root = (repo as NSString).standardizingPath
+        guard full.hasPrefix(root + "/") else { return } // editing outside the repository on screen
+
+        following = String(full.dropFirst(root.count + 1))
+
+        // git has not necessarily noticed the write yet, so the next couple of
+        // reads get to look as well. Bounded because some writes never become a
+        // change at all: an agent that rewrites a file with its own contents,
+        // or writes into an ignored directory, would otherwise leave this
+        // hunting for a row that is never coming.
+        followTries = 3
+
+        // Quiet, because the file set usually has not changed: editing a file
+        // that was already changed leaves it identical, and a loud refresh
+        // would rebuild the list under the user on every save.
+        refresh(quiet: true)
+    }
+
+    /// Moves the selection onto the followed file once it is actually in the
+    /// list.
+    ///
+    /// Separate from the rebuild because most of the time there is no rebuild:
+    /// editing a file that was already changed leaves the file set identical,
+    /// and the selection still has to move. Reading the diff is left to the
+    /// caller, which does it for whatever is selected either way.
+    private func selectFollowed() {
+        guard let want = following, !want.isEmpty else { return }
+
+        guard let index = rows.firstIndex(where: {
+            $0.change.path.caseInsensitiveCompare(want) == .orderedSame
+        }) else {
+            followTries -= 1
+            if followTries <= 0 { following = nil }
+            return
+        }
+
+        following = nil
+        setSelection(index)
+        rows[index].scrollToVisible(rows[index].bounds)
     }
 
     // -------------------------------------------------------------- selection

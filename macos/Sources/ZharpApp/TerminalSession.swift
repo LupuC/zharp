@@ -15,6 +15,14 @@ final class TerminalSession {
     let emulator: TerminalEmulator
     private(set) var title: String
 
+    /// Identifies this session to anything running inside it.
+    ///
+    /// Zharp puts it in the shell's environment, so an agent's hook inherits it
+    /// and can name the tab it belongs to when it has no other way to say.
+    /// That is what lets two agents in the same repository report separately,
+    /// which matching on the working directory cannot do.
+    let sessionKey = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+
     /// Shell-reported current directory; falls back to the start directory.
     private(set) var workingDirectory: String?
     var isStarted: Bool { pty != nil }
@@ -59,6 +67,24 @@ final class TerminalSession {
     var exited: ((Int32) -> Void)?
     var bell: (() -> Void)?
 
+    /// An AI agent running in this session reporting its own state. Raised on
+    /// the pty thread with the raw JSON body, straight off the wire: whoever
+    /// takes it parses it, and treats it as hostile until it has.
+    var agentReported: ((String) -> Void)?
+
+    /// The shell is back at a fresh prompt, so whatever was running in the
+    /// foreground has exited. Raised on the pty thread.
+    var promptReturned: (() -> Void)?
+
+    /// The user sent input to this session. Main thread, since that is where
+    /// keystrokes arrive.
+    ///
+    /// Worth an event because of what it means when an agent is waiting: they
+    /// have answered it. No agent emits "that permission was resolved", and
+    /// subscribing to every tool call to infer it costs a process per call.
+    /// Zharp is the one holding the keyboard, so it already knows.
+    var userTyped: (() -> Void)?
+
     init(arguments: [String], workingDirectory: String?, initialTitle: String,
          scrollbackLines: Int = 10000) {
         self.arguments = arguments
@@ -90,6 +116,12 @@ final class TerminalSession {
         emulator.bellRang = { [weak self] in
             self?.bell?()
         }
+        emulator.agentReported = { [weak self] payload in
+            self?.agentReported?(payload)
+        }
+        emulator.promptReturned = { [weak self] in
+            self?.promptReturned?()
+        }
     }
 
     func ensureStarted(cols: Int, rows: Int) {
@@ -103,6 +135,18 @@ final class TerminalSession {
             "TERM_PROGRAM_VERSION": App.version,
             "COLORTERM": "truecolor",
             "LANG": ProcessInfo.processInfo.environment["LANG"] ?? "en_US.UTF-8",
+
+            // The version of the agent-report protocol this build understands.
+            // Agent hooks check for it and stay silent when it is absent, so the
+            // same hook can be installed once and cost nothing in any other
+            // terminal. Bump it only for a change old Zharps cannot read.
+            "ZHARP_AGENT_PROTOCOL": "1",
+
+            // Which tab this shell is. Only agents that report through the
+            // spool need it, but every session gets one: which agent somebody
+            // runs is not knowable when the shell starts.
+            "ZHARP_SESSION": sessionKey,
+            "ZHARP_SPOOL": AgentSpool.directory.path,
 
             // Strip session markers Zharp may have inherited from its own parent
             // (e.g. when launched from inside a Claude Code session). Leaking them
@@ -181,6 +225,7 @@ final class TerminalSession {
             }
             if let pending { commandExecuted?(pending) }
         }
+        userTyped?()
         writeRaw(text)
     }
 
@@ -192,6 +237,11 @@ final class TerminalSession {
         emulator.syncRoot.lock()
         let bracketed = emulator.bracketedPaste
         emulator.syncRoot.unlock()
+
+        // Pasting an answer counts as answering. Only `send` raised this at
+        // first, which left a tab still badged after the user had pasted the
+        // path or the branch name the agent was asking for.
+        userTyped?()
         writeRaw(bracketed ? "\u{1b}[200~" + normalized + "\u{1b}[201~" : normalized)
     }
 
