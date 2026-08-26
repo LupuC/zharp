@@ -454,6 +454,237 @@ do {
     check(e.peekPendingCommand() == nil, "cursor-disconnected B is not pending input")
 }
 
+// --- agent reports (OSC 777) --------------------------------------------------
+
+do {
+    let e = newEmu()
+    var payload: String?
+    e.agentReported = { payload = $0 }
+
+    feed(e, "\u{1b}]777;notify;zharp://agent;{\"v\":1,\"event\":\"done\"}\u{7}")
+    check(payload == "{\"v\":1,\"event\":\"done\"}",
+          "OSC 777 agent report (got '\(payload ?? "nil")')")
+
+    // A JSON body is full of semicolons and colons; only the first two
+    // separators belong to the OSC framing.
+    payload = nil
+    feed(e, "\u{1b}]777;notify;zharp://agent;{\"a\":\"x;y\",\"b\":\"z\"}\u{7}")
+    check(payload == "{\"a\":\"x;y\",\"b\":\"z\"}",
+          "semicolons inside the body survive (got '\(payload ?? "nil")')")
+
+    // Our own hooks end the sequence with BEL, but ST is just as valid and a
+    // report written by hand or by somebody else's wrapper may use it.
+    payload = nil
+    feed(e, "\u{1b}]777;notify;zharp://agent;{\"v\":1}\u{1b}\\")
+    check(payload == "{\"v\":1}", "ST ends the report too (got '\(payload ?? "nil")')")
+}
+
+do {
+    // Several terminals carry desktop notifications on OSC 777, so the title is
+    // the only thing separating an agent talking to us from traffic that is
+    // none of our business.
+    let e = newEmu()
+    var payload: String?
+    e.agentReported = { payload = $0 }
+
+    feed(e, "\u{1b}]777;notify;other-terminal://agent;{\"v\":1}\u{7}")
+    check(payload == nil, "another terminal's OSC 777 is ignored")
+
+    feed(e, "\u{1b}]777;notify;zharp://agentx;{\"v\":1}\u{7}")
+    check(payload == nil, "a title we merely begin is not ours")
+
+    feed(e, "\u{1b}]777;Notify;zharp://agent;{\"v\":1}\u{7}")
+    feed(e, "\u{1b}]777;notify;zharp://Agent;{\"v\":1}\u{7}")
+    check(payload == nil, "the verb and the title are both case sensitive")
+
+    feed(e, "\u{1b}]777;notify;zharp://agent\u{7}")
+    feed(e, "\u{1b}]777;something-else;zharp://agent;{}\u{7}")
+    feed(e, "\u{1b}]777\u{7}")
+    check(payload == nil, "malformed OSC 777 raises nothing")
+
+    feed(e, "\u{1b}]778;notify;zharp://agent;{\"v\":1}\u{7}")
+    check(payload == nil, "a neighbouring OSC code is not ours either")
+}
+
+do {
+    // The emulator hands the body over exactly as it arrived and judges none of
+    // it. The version gate, the field limits and the event names belong to the
+    // report parser a layer up: this end of the pipe cannot tell a stale
+    // protocol from a hostile one, and both look like text.
+    let e = newEmu()
+    var bodies: [String] = []
+    e.agentReported = { bodies.append($0) }
+
+    feed(e, "\u{1b}]777;notify;zharp://agent;{\"v\":2,\"agent\":\"claude\",\"event\":\"done\"}\u{7}")
+    feed(e, "\u{1b}]777;notify;zharp://agent;not json at all\u{7}")
+    feed(e, "\u{1b}]777;notify;zharp://agent;\u{7}")
+    check(bodies == ["{\"v\":2,\"agent\":\"claude\",\"event\":\"done\"}", "not json at all", ""],
+          "the body arrives verbatim, version and all (got \(bodies))")
+}
+
+do {
+    // Past the OSC length limit the body is cut where the limit falls, so what
+    // arrives is broken JSON the report parser drops. What matters here is that
+    // the overflow costs nothing else: the sequence still ends where its
+    // terminator says it does, and the next report is read normally.
+    let e = newEmu()
+    var payload: String?
+    e.agentReported = { payload = $0 }
+
+    // The framing is counted against the same limit as the body.
+    let framing = "777;notify;zharp://agent;".count
+    let huge = String(repeating: "A", count: 5000)
+    feed(e, "\u{1b}]777;notify;zharp://agent;{\"v\":1,\"summary\":\"\(huge)\"}\u{7}")
+    check(payload?.count == 4096 - framing,
+          "an oversized body is cut at the OSC limit (got \(payload?.count ?? -1))")
+    check(payload?.hasSuffix("}") == false, "and cannot be mistaken for a whole report")
+
+    payload = nil
+    feed(e, "ok")
+    feed(e, "\u{1b}]777;notify;zharp://agent;{\"v\":1,\"event\":\"idle\"}\u{7}")
+    check(rowText(e, 0) == "ok", "text after the overflow still prints (got '\(rowText(e, 0))')")
+    check(payload == "{\"v\":1,\"event\":\"idle\"}", "and the next report is read normally")
+}
+
+do {
+    // The limit is counted in UTF-16 units, the way the Windows parser counts
+    // StringBuilder.Length, and NOT in Characters.
+    //
+    // A Character is a grapheme cluster, so a run of combining marks all joins
+    // the one cluster in front of it: the count stays at 1 no matter how many
+    // arrive, the cap never trips, and every append pays for a fresh walk of
+    // the whole buffer. Anything that can print to a terminal could send them,
+    // and 50k of them took 65 seconds on the reader thread - which holds the
+    // emulator's lock, so the app stops drawing rather than just that tab.
+    let e = newEmu()
+    var payload: String?
+    e.agentReported = { payload = $0 }
+
+    let framing = "777;notify;zharp://agent;".count
+    let marks = String(repeating: "\u{0301}", count: 20_000)
+    let started = Date()
+    feed(e, "\u{1b}]777;notify;zharp://agent;X\(marks)\u{7}")
+    let took = Date().timeIntervalSince(started)
+
+    check(payload?.unicodeScalars.count == 4096 - framing,
+          "combining marks are counted against the OSC limit "
+          + "(got \(payload?.unicodeScalars.count ?? -1) scalars)")
+    check(took < 1, "and cost no walk of the buffer per mark (took \(String(format: "%.2f", took))s)")
+
+    feed(e, "after")
+    check(rowText(e, 0) == "after", "text after them still prints (got '\(rowText(e, 0))')")
+}
+
+do {
+    // Anything below 0x20 is dropped where it stands rather than ending the
+    // sequence, so a report carrying a raw newline arrives quietly corrupted
+    // instead of not arriving at all. That is why the protocol asks for the
+    // JSON to be escaped.
+    let e = newEmu()
+    var payload: String?
+    e.agentReported = { payload = $0 }
+    feed(e, "\u{1b}]777;notify;zharp://agent;{\"summary\":\"a\nb\"}\u{7}")
+    check(payload == "{\"summary\":\"ab\"}",
+          "raw control characters are stripped, not fatal (got '\(payload ?? "nil")')")
+}
+
+do {
+    // A read from the pty returns whatever had arrived by then, so a report can
+    // be split anywhere, including inside the escape that opens it.
+    let e = newEmu()
+    var payload: String?
+    e.agentReported = { payload = $0 }
+
+    feed(e, "\u{1b}]777;notify;zharp:/")
+    check(payload == nil, "half a report raises nothing yet")
+    feed(e, "/agent;{\"v\":1,\"eve")
+    feed(e, "nt\":\"permission\"}\u{7}")
+    check(payload == "{\"v\":1,\"event\":\"permission\"}",
+          "a split report is assembled (got '\(payload ?? "nil")')")
+
+    payload = nil
+    feed(e, "\u{1b}")
+    feed(e, "]777;notify;zharp://agent;{\"v\":1}")
+    feed(e, "\u{7}")
+    check(payload == "{\"v\":1}", "even when the split lands on the escape (got '\(payload ?? "nil")')")
+}
+
+do {
+    // A crashed or hostile writer can leave an OSC open forever. Whatever comes
+    // next has to win the parser back and be read as itself, rather than as
+    // more of the abandoned report.
+    let e = newEmu(20, 5)
+    var payload: String?
+    e.agentReported = { payload = $0 }
+
+    // CAN abandons the sequence outright.
+    feed(e, "\u{1b}]777;notify;zharp://agent;{\"v\":1\u{18}after")
+    check(payload == nil, "an abandoned report raises nothing")
+    check(rowText(e, 0) == "after", "and what follows it prints as text (got '\(rowText(e, 0))')")
+
+    // Unterminated, then a real sequence: the ESC ends the OSC.
+    feed(e, "\r\n\u{1b}]777;notify;zharp://agent;{\"v\":1\u{1b}[31mred")
+    check(payload == nil, "an unterminated report raises nothing")
+    check(rowText(e, 1) == "red", "the sequence after it is honoured (got '\(rowText(e, 1))')")
+    check(cellAt(e, 1, 0).fg == .indexed(1), "including its colour")
+
+    // And a well formed report still gets through after all of that.
+    feed(e, "\u{1b}]777;notify;zharp://agent;{\"v\":1,\"event\":\"end\"}\u{7}")
+    check(payload == "{\"v\":1,\"event\":\"end\"}",
+          "reports still arrive afterwards (got '\(payload ?? "nil")')")
+}
+
+// --- prompt returned ----------------------------------------------------------
+//
+// The signal a tab uses to decide its agent has exited. An agent's own "session
+// ended" hook fires while its process is tearing down, so it is the one report
+// that routinely never arrives; a prompt appearing below the last one cannot be
+// missed, and needs nothing from the agent.
+
+do {
+    let e = newEmu()
+    var returns = 0
+    e.promptReturned = { returns += 1 }
+
+    feed(e, "\u{1b}]133;A\u{7}$ ")
+    check(returns == 0, "the first prompt is not a return (nothing ran before it)")
+
+    feed(e, "ls\r\nfile\r\n\u{1b}]133;A\u{7}$ ")
+    check(returns == 1, "a prompt below the last one is (got \(returns))")
+
+    feed(e, "claude\r\n")
+    check(returns == 1, "output alone raises nothing")
+    feed(e, "\u{1b}]133;A\u{7}$ ")
+    check(returns == 2, "and the prompt after the agent exits raises it again (got \(returns))")
+}
+
+do {
+    // A prompt re-rendered in place is not a new one. Agent CLIs repaint their
+    // own line constantly, and treating each repaint as "the agent is gone"
+    // would clear the tab's status a few times a second.
+    let e = newEmu()
+    var returns = 0
+    e.promptReturned = { returns += 1 }
+
+    feed(e, "\u{1b}]133;A\u{7}$ ")
+    feed(e, "\r\u{1b}]133;A\u{7}$ ")
+    feed(e, "\r\u{1b}]133;A\u{7}$ ")
+    check(returns == 0, "a prompt redrawn on the same line is not a return (got \(returns))")
+}
+
+do {
+    // Raised after the mark bookkeeping, so a listener that turns round and
+    // asks the emulator what it knows sees the new prompt, not the old one.
+    let e = newEmu()
+    var marksWhenRaised = 0
+    e.promptReturned = { }
+    feed(e, "\u{1b}]133;A\u{7}$ ls\r\nout\r\n")
+    e.promptReturned = { marksWhenRaised = e.getPromptMarks().count }
+    feed(e, "\u{1b}]133;A\u{7}$ ")
+    check(marksWhenRaised == 2, "the new mark is already recorded when it fires "
+          + "(got \(marksWhenRaised))")
+}
+
 // --- new themes ----------------------------------------------------------------
 
 do {

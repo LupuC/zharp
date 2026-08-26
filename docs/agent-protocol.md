@@ -28,11 +28,16 @@ nothing needs routing: whatever comes out of a pty belongs to that pty's tab.
 This is the better transport and it is used wherever it is available, which
 today means Claude Code.
 
-**Through a spool directory.** The hook writes its report into
-`%LOCALAPPDATA%\Zharp\agents` and Zharp picks it up. This is for agents with no
-way to return a terminal sequence, which is most of them: a hook process has no
-controlling terminal of its own, and on Windows there is not even a `/dev/tty`
-to borrow. Codex and OpenCode work this way.
+**Through a spool directory.** The hook writes its report into Zharp's own
+data directory (`%LOCALAPPDATA%\Zharp\agents` on Windows,
+`~/Library/Application Support/Zharp/agents` on macOS) and Zharp picks it up.
+The hook is told where by `ZHARP_SPOOL` rather than working it out. This is for
+agents with no way to return a terminal sequence, which is most of them: a hook
+process has no controlling terminal of its own, and on Windows there is not
+even a `/dev/tty` to borrow. macOS does have one, but a hook inherits the
+agent's, and the agent is in the middle of painting that screen, so writing
+escape bytes into it is a race rather than a transport. Codex and OpenCode work
+this way.
 
 The spool has to answer a question the pty answers for free: which tab. It is
 not guessed from the working directory, which cannot separate two agents in one
@@ -143,8 +148,11 @@ that is the `terminalSequence` field:
 
 ### Claude Code
 
-Implemented, and on by default. The hook script ships with Zharp at
-`Integrations/ClaudeCode/zharp-agent.ps1`, and Zharp installs the hooks into
+Implemented, and on by default. The hook script ships with Zharp: PowerShell on
+Windows (`Integrations/ClaudeCode/zharp-agent.ps1`), and `/bin/sh` plus `plutil`
+and `awk` on macOS (`Resources/Integrations/zharp-agent-claude.sh`), because a
+stock Mac has no PowerShell and Claude Code no longer implies node either. Both
+emit the same `terminalSequence`. Zharp installs the hooks into
 `~/.claude/settings.json` at startup without being asked.
 
 That is a deliberate choice and worth defending, because writing to somebody
@@ -170,9 +178,16 @@ is there for somebody deploying Zharp where touching an agent's config is not
 allowed, not as a preference to weigh up.
 
 What *is* in Settings is whether being interrupted is welcome: **Terminal →
-Notifications** controls the desktop notification and taskbar flash raised when
-an agent needs you and Zharp is not the window in front. The tab badge is not
-part of that and always shows.
+Notifications** controls the desktop notification and the nudge from the
+taskbar or the Dock, raised when an agent needs you and Zharp is not what you
+are looking at. The tab badge is not part of that and always shows.
+
+The nudge is whatever the platform's own is. Windows flashes the taskbar
+button, which stops after a few seconds. macOS bounces the Dock icon and then
+marks it with how many sessions are waiting, across every window, until you
+bring Zharp forward and look at them; the case this whole feature exists for is
+an agent blocking while you are in another app entirely, and a flash that is
+over in a second does not survive that.
 
 Startup also repairs the hooks rather than only adding them. An update moves
 the executable, which leaves hooks pointing at a script path that no longer
@@ -199,26 +214,30 @@ The events line up almost exactly with Claude Code's, but the transport does
 not exist: there is no `terminalSequence` field, and the documentation is
 explicit that a hook's stdout is JSON or model context and never reaches the
 terminal. Checking the shipped binary agrees, and it is also missing
-`PostToolBatch`. So Codex reports through the spool, and `PostToolUse` is
-unfiltered rather than limited to writes, because it is then the only thing
-that can say the agent is running again after a permission prompt was
-answered.
+`PostToolBatch`. So Codex reports through the spool.
 
-That is affordable here because the hook is node rather than PowerShell.
-Codex ships as an npm package, so node is always present where Codex is, and
-it starts in roughly a third of the time: ~48ms against ~139ms measured.
+It reports through exactly one hook, which is the whole of the table:
 
 | Zharp event | Codex hook | Matcher |
 |---|---|---|
-| `start` | `SessionStart` | |
-| `prompt` | `UserPromptSubmit` | |
-| `tool` | `PostToolUse` | |
 | `permission` | `PermissionRequest` | |
-| `done` | `Stop` | |
-| `end` | `SessionEnd` | |
+
+That is the one thing Zharp cannot work out for itself, and every hook Codex
+runs costs two processes because it takes a command line rather than an
+argument list. `SessionStart` said what Zharp already read off the command that
+started the agent. `SessionEnd` said what the shell says better by drawing its
+prompt again, and says it from a process that is not busy dying. `PostToolUse`
+was the expensive one: it bought a live "editing that file" line and let the
+changes panel follow along, and it fired on every tool call an agent made, so
+you could watch the processes appear and the terminal was slower for it.
+
+A permission that has been answered needs no hook either. Typing into a session
+is Zharp's own signal that the user has replied, and Zharp is the one holding
+the keyboard.
 
 Codex has no equivalent of Claude's `idle_prompt` notification or of
-`StopFailure`, so there is no `idle` or `error` report from it.
+`StopFailure`, so there would be no `idle` or `error` report from it in any
+case.
 
 Three things are specific to Codex and worth knowing.
 
