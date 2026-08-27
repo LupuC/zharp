@@ -47,6 +47,26 @@ final class AppSettings: Codable {
 
     var sidebarVisible = true
 
+    /// Desktop notification plus a bouncing Dock icon when an AI agent is
+    /// waiting for you and Zharp is not the app in front. The tab card says so
+    /// regardless; this is only about interrupting you elsewhere.
+    var agentNotifications = true
+
+    /// Whether the AI agent hooks stay installed. Deliberately has no switch in
+    /// Settings: agent support is part of the terminal, not a feature to go and
+    /// find, and a tab that cannot say its agent is blocked is the whole thing
+    /// this exists to fix. It is here so that someone deploying Zharp somewhere
+    /// that forbids touching an agent's config can set it to false by hand.
+    var agentIntegration = true
+
+    /// The Codex hook script Zharp has already announced. Codex will not run a
+    /// hook it has not been told to trust, so the first session after they are
+    /// installed says so; without that, a Codex tab that reports nothing looks
+    /// broken rather than unapproved. Holding the path rather than a flag means
+    /// an update, which moves the script and needs approving again, says so
+    /// again on its own.
+    var codexNoticeFor = ""
+
     /// When true, NO_COLOR is removed from the environment of shells Zharp
     /// spawns, so tools emit ANSI colors even if it is set system-wide.
     var overrideNoColor = true
@@ -172,6 +192,7 @@ final class AppSettings: Codable {
         case theme, backdrop, backgroundOpacity, tabLayout, sidebarDensity
         case sidebarTitleMode, sidebarShowPath, sidebarShowSearch
         case sidebarVisible, overrideNoColor
+        case agentNotifications, agentIntegration, codexNoticeFor
         case restoreSessions, savedSessions, savedActiveIndex
         case fontSize, fontFamily, cursorStyle, inputPosition, scrollbackLines
         case shell, defaultDirectory, lastClosedDirectory, onboarded
@@ -204,6 +225,9 @@ final class AppSettings: Codable {
         sidebarShowSearch = b(.sidebarShowSearch, true)
         sidebarVisible = b(.sidebarVisible, true)
         overrideNoColor = b(.overrideNoColor, true)
+        agentNotifications = b(.agentNotifications, true)
+        agentIntegration = b(.agentIntegration, true)
+        codexNoticeFor = s(.codexNoticeFor, "")
         fontSize = d(.fontSize, 13)
         fontFamily = s(.fontFamily, "SF Mono")
         cursorStyle = s(.cursorStyle, "block")

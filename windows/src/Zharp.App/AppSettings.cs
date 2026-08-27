@@ -66,6 +66,56 @@ public sealed class AppSettings
     public bool SidebarVisible { get; set; } = true;
 
     /// <summary>
+    /// Desktop notification plus a taskbar flash when an AI agent is waiting
+    /// for you and Zharp is not the window in front. The tab card says so
+    /// regardless; this is only about interrupting you elsewhere.
+    /// </summary>
+    [JsonPropertyName("agentNotifications")]
+    public bool AgentNotifications { get; set; } = true;
+
+    /// <summary>
+    /// Whether Zharp may open its own ssh connection to read git on a machine
+    /// you are already connected to.
+    ///
+    /// It is one extra login per host, held open while you work there and
+    /// closed after five idle minutes, and it only ever reads. Turn it off on
+    /// a host where every session is audited, or where a second connection
+    /// would trip a login alert: the panel then says where you are and stops
+    /// there, rather than answering with this machine's repository.
+    /// </summary>
+    [JsonPropertyName("remoteGit")]
+    public bool RemoteGit { get; set; } = true;
+
+    /// <summary>
+    /// Height of the changed-files list inside the changes panel, in unzoomed
+    /// pixels. How many files a repository has says nothing about how many you
+    /// want to see at once, so it is worth dragging and worth remembering.
+    /// </summary>
+    [JsonPropertyName("diffFileListHeight")]
+    public double DiffFileListHeight { get; set; } = 160;
+
+    /// <summary>
+    /// Whether the AI agent hooks stay installed. Deliberately has no switch in
+    /// Settings: agent support is part of the terminal, not a feature to go and
+    /// find, and a tab that cannot say its agent is blocked is the whole thing
+    /// this exists to fix. It is here so that someone deploying Zharp somewhere
+    /// that forbids touching an agent's config can set it to false by hand.
+    /// </summary>
+    [JsonPropertyName("agentIntegration")]
+    public bool AgentIntegration { get; set; } = true;
+
+    /// <summary>
+    /// The Codex hook script Zharp has already announced. Codex will not run a
+    /// hook it has not been told to trust, so the first session after they are
+    /// installed says so; without that, a Codex tab that reports nothing looks
+    /// broken rather than unapproved. Holding the path rather than a flag means
+    /// an update, which moves the script and needs approving again, says so
+    /// again on its own.
+    /// </summary>
+    [JsonPropertyName("codexNoticeFor")]
+    public string CodexNoticeFor { get; set; } = "";
+
+    /// <summary>
     /// When true, NO_COLOR is removed from the environment of shells Zharp
     /// spawns, so tools emit ANSI colors even if it is set system-wide.
     /// </summary>

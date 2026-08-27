@@ -35,6 +35,21 @@ public final class VtParser {
 
     private var intermediates = ""
     private var osc = ""
+
+    /// How much is in `osc`, counted in UTF-16 units and kept as we go.
+    ///
+    /// Not `osc.count`. That is a grapheme-cluster count, so it walks the whole
+    /// buffer on every character and, worse, never grows at all for combining
+    /// marks: a run of U+0301 all joins the one cluster it follows, so the cap
+    /// below never trips and the buffer grows without bound while each append
+    /// costs a full re-scan. 50k of them took 65 seconds here, on the reader
+    /// thread, holding the emulator's lock the whole time - which stops the app
+    /// drawing, not just that tab. Anything that can print to a terminal could
+    /// send them. The Windows parser counts StringBuilder.Length, which is
+    /// UTF-16 units and O(1); this matches it, so the two clip in the same
+    /// place as well as being cheap.
+    private var oscLength = 0
+
     private var paramGroups: [[Int]] = []
     private var currentGroup: [Int] = []
     private var currentValue = 0
@@ -72,6 +87,7 @@ public final class VtParser {
                 enterCsi()
             } else if rune == 0x5D { // ']'
                 osc = ""
+                oscLength = 0
                 state = .oscString
             } else if rune == 0x50 || rune == 0x58 || rune == 0x5E || rune == 0x5F { // P X ^ _
                 state = .stringIgnore
@@ -147,9 +163,10 @@ public final class VtParser {
                 handler.oscDispatch(payload: osc)
             } else if rune == 0x1B {
                 state = .oscEsc
-            } else if rune >= 0x20 && osc.count < Self.maxOscLength {
+            } else if rune >= 0x20 && oscLength < Self.maxOscLength {
                 if let scalar = UnicodeScalar(UInt32(rune)) {
                     osc.unicodeScalars.append(scalar)
+                    oscLength += scalar.value > 0xFFFF ? 2 : 1
                 }
             }
 

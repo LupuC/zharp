@@ -10,7 +10,7 @@ Keeping it accurate is part of shipping a feature: **any pull request that adds,
 removes or changes a user facing feature updates the relevant row here in the
 same PR.** A row that is wrong is treated as a bug.
 
-Current as of 0.18 on Windows and macOS. Linux has no code yet, so its column
+Current as of 0.19 on Windows and macOS. Linux has no code yet, so its column
 is "Not yet" everywhere; it is here so the size of the port is visible.
 
 Legend: **Yes** means shipped and usable. **Partial** means it exists but is
@@ -71,6 +71,9 @@ means it is not implemented.
 | Live working directory on the tab card | Yes | Yes | Not yet | |
 | Last command run shown on the tab card | Yes | Yes | Not yet | |
 | AI agent logo and live status on the tab card | Yes | Yes | Not yet | Detects Claude Code, Codex, Gemini CLI, OpenCode, Aider |
+| Agents report their own status instead of it being read off the screen | Partial | Partial | Not yet | Claude Code, Codex and OpenCode on both. See [docs/agent-protocol.md](agent-protocol.md) |
+| Badge, a nudge from the taskbar or Dock, and a notification when an agent is waiting for you | Yes | Yes | Not yet | Badge always; the interruptions are `Terminal > Notifications`. Windows flashes the taskbar, macOS bounces the Dock and then badges it with how many sessions are waiting |
+| Changes panel follows the file an agent is editing | Yes | Yes | Not yet | Claude Code and OpenCode; Codex hooks cost too much per tool call |
 | Drag a tab to reorder it | Yes | Yes | Not yet | |
 | Drag a tab onto another window to hand it over, shell still running | Yes | Yes | Not yet | |
 | Tear a tab out into a window of its own | Yes | Yes | Not yet | |
@@ -80,13 +83,23 @@ means it is not implemented.
 | New tab at the last closed tab's directory | Yes | Yes | Not yet | |
 | Floating session search palette | Yes | Yes | Not yet | |
 | Changes panel: git diff beside the terminal | Yes | Yes | Not yet | Read-only. Changed files, per-file diff with line numbers, totals on the title bar |
+| Changes panel over ssh | Yes | Yes | Not yet | Reads git on the machine the session is actually on, over a second read-only connection that never prompts and never writes. Can be turned off in Settings, where off means the panel names the machine and stops |
 | Panes and splits | Not yet | Not yet | Not yet | Roadmap on both |
+
+A session that has been sent to another machine with `ssh` is standing
+somewhere the local `git` knows nothing about. Both platforms track that now:
+the panel either shows the remote repository or says which machine it cannot
+read and why, and the sidebar card names the host. It has a row of its own
+rather than a footnote on the row above because the failure it replaced was the
+one wrong answer that looks like a right one, a panel confidently describing a
+repository on a computer you are no longer using.
 
 ## Shell integration
 
 | Feature | Windows | macOS | Linux | Notes |
 |---|---|---|---|---|
 | Working directory reporting (OSC 7) | Yes | Yes | Not yet | Windows also parses OSC 9;9, the ConEmu convention |
+| Knowing which machine a session is on | Yes | Yes | Not yet | Keeps the host from OSC 7, reads the `ssh` command at the prompt, and falls back to the remote shell's window title. Only a host reached by a command Zharp watched you type is one it will connect to on its own |
 | Auto-injected prompt hook, no rc file editing | Yes | Yes | Not yet | Each platform hooks the shells it actually ships with: PowerShell, pwsh, cmd and bash on Windows; zsh, bash, fish and pwsh on macOS |
 | Prompt and command marks (OSC 133) | Yes | Yes | Not yet | Both emit and consume `133;A` and `133;B`, which is what blocks are built on. `133;C` and `133;D` are roadmap on both |
 | Strip `NO_COLOR` from spawned shells | Yes | Yes | Not yet | `overrideNoColor` |

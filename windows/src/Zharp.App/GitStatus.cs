@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Zharp.Core.Remote;
 
 namespace Zharp.App;
 
@@ -49,6 +50,13 @@ public sealed class GitFileChange
 ///
 /// Everything here is read-only. Nothing in this file stages, commits, checks
 /// out or writes to the repository in any way.
+///
+/// A session over ssh is asked the same questions through <see
+/// cref="SshGitChannel"/>, which runs the same git commands on the machine the
+/// user is actually standing on. Every method here takes a <see
+/// cref="SessionLocation"/> rather than a path for that reason: a path alone
+/// cannot say which computer it belongs to, and answering with the wrong one
+/// is exactly the bug this replaced.
 /// </summary>
 public static class GitStatus
 {
@@ -65,24 +73,61 @@ public static class GitStatus
     /// the working directory for every later call, so submodules and worktrees
     /// resolve to the repository the user is actually standing in.
     /// </summary>
-    public static async Task<string?> DiscoverRepoAsync(string? workingDirectory, CancellationToken ct = default)
+    public static async Task<SessionLocation?> DiscoverRepoAsync(
+        SessionLocation? at, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
+        if (at == null || !at.HasPath)
             return null;
 
-        var result = await RunAsync(workingDirectory, ct, "rev-parse", "--show-toplevel");
+        if (at.IsRemote)
+        {
+            var channel = await SshGitChannels.GetAsync(at.Remote!, ct);
+            if (channel is not { IsUsable: true })
+                return null;
+
+            // A remote shell reports ~/work as often as it reports the full
+            // path, and git would look for a directory literally called "~".
+            string here = PosixPath.ExpandHome(at.Path, channel.Home);
+            string remoteRoot = (await channel.RunAsync(
+                here, new[] { "git", "rev-parse", "--show-toplevel" }, ct)).Trim();
+            return remoteRoot.Length == 0 ? null : at.WithPath(remoteRoot);
+        }
+
+        if (!Directory.Exists(at.Path))
+            return null;
+
+        var result = await RunAsync(at, ct, "rev-parse", "--show-toplevel");
         if (!result.Ok)
             return null;
 
         var root = result.StdOut.Trim();
-        return root.Length == 0 ? null : root.Replace('/', Path.DirectorySeparatorChar);
+        return root.Length == 0
+            ? null
+            : at.WithPath(root.Replace('/', Path.DirectorySeparatorChar));
+    }
+
+    /// <summary>
+    /// Why a machine reached over ssh cannot be read, or null when it can.
+    /// Shown instead of a file list, because "not a git repository" would be a
+    /// guess when the truth is that nobody has been able to ask.
+    /// </summary>
+    public static async Task<string?> RemoteProblemAsync(
+        RemoteHost host, CancellationToken ct = default)
+    {
+        if (!SshGitChannels.Enabled)
+            return "Reading git over ssh is turned off in Settings.";
+
+        var channel = await SshGitChannels.GetAsync(host, ct);
+        if (channel == null)
+            return "Reading git over ssh is turned off in Settings.";
+        return channel.IsUsable ? null : channel.Problem ?? "The connection could not be opened";
     }
 
     /// <summary>
     /// The branch name, or a short commit id when the head is detached, or
     /// null when neither can be read (a repository with no commits yet).
     /// </summary>
-    public static async Task<string?> CurrentBranchAsync(string repoRoot, CancellationToken ct = default)
+    public static async Task<string?> CurrentBranchAsync(SessionLocation repoRoot, CancellationToken ct = default)
     {
         var branch = await RunAsync(repoRoot, ct, "rev-parse", "--abbrev-ref", "HEAD");
         if (!branch.Ok)
@@ -107,7 +152,7 @@ public static class GitStatus
     /// a newline or a non-ASCII byte is unparseable from the default output,
     /// and git will happily hand you one.
     /// </summary>
-    public static async Task<IReadOnlyList<GitFileChange>> StatusAsync(string repoRoot, CancellationToken ct = default)
+    public static async Task<IReadOnlyList<GitFileChange>> StatusAsync(SessionLocation repoRoot, CancellationToken ct = default)
     {
         var result = await RunAsync(repoRoot, ct,
             "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames");
@@ -175,14 +220,15 @@ public static class GitStatus
     /// long addition. That is what the user means by "what changed".
     /// </summary>
     public static async Task<string> DiffAsync(
-        string repoRoot, GitFileChange change, CancellationToken ct = default)
+        SessionLocation repoRoot, GitFileChange change, CancellationToken ct = default)
     {
         if (change.Kind == GitChangeKind.Untracked)
         {
             // --no-index exits 1 when the files differ, which is the normal
             // case here, so its exit code is not a failure signal.
             var untracked = await RunAsync(repoRoot, ct, allowFailure: true,
-                "diff", "--no-index", "--no-color", "--", NullDevice, change.Path);
+                "diff", "--no-index", "--no-color", "--",
+                repoRoot.IsRemote ? "/dev/null" : NullDevice, change.Path);
             return untracked.StdOut;
         }
 
@@ -207,7 +253,7 @@ public static class GitStatus
     /// a line count of a binary is not a meaningful number to show.
     /// </summary>
     public static async Task<Dictionary<string, (int Added, int Removed)>> NumstatAsync(
-        string repoRoot, CancellationToken ct = default)
+        SessionLocation repoRoot, CancellationToken ct = default)
     {
         var totals = new Dictionary<string, (int, int)>(StringComparer.Ordinal);
 
@@ -239,11 +285,29 @@ public static class GitStatus
     /// git, which would need one --no-index run per file to say the same thing.
     /// </summary>
     public static async Task<int> CountUntrackedAsync(
-        string repoRoot, string path, CancellationToken ct = default)
+        SessionLocation repoRoot, string path, CancellationToken ct = default)
     {
+        if (repoRoot.IsRemote)
+        {
+            // Reading the file back over the wire to count its newlines would
+            // move the whole file for a number in a list row. wc is on every
+            // machine that has a shell.
+            var channel = await SshGitChannels.GetAsync(repoRoot.Remote!, ct);
+            if (channel is not { IsUsable: true })
+                return 0;
+
+            string answer = await channel.RunAsync(
+                repoRoot.Path, new[] { "wc", "-l", "--", path }, ct);
+            var first = answer.AsSpan().Trim();
+            int space = first.IndexOf(' ');
+            if (space > 0)
+                first = first[..space];
+            return int.TryParse(first, out int counted) ? counted : 0;
+        }
+
         try
         {
-            string full = Path.Combine(repoRoot, path.Replace('/', Path.DirectorySeparatorChar));
+            string full = Path.Combine(repoRoot.Path, path.Replace('/', Path.DirectorySeparatorChar));
             var info = new FileInfo(full);
             if (!info.Exists)
                 return 0;
@@ -295,10 +359,46 @@ public static class GitStatus
 
     private readonly record struct GitResult(bool Ok, string StdOut, string StdErr);
 
-    private static Task<GitResult> RunAsync(string workingDirectory, CancellationToken ct, params string[] args)
-        => RunAsync(workingDirectory, ct, allowFailure: false, args);
+    private static Task<GitResult> RunAsync(SessionLocation at, CancellationToken ct, params string[] args)
+        => RunAsync(at, ct, allowFailure: false, args);
 
     private static async Task<GitResult> RunAsync(
+        SessionLocation at, CancellationToken ct, bool allowFailure, params string[] args)
+    {
+        if (at.IsRemote)
+            return await RunRemoteAsync(at, ct, args);
+
+        return await RunLocalAsync(at.Path, ct, allowFailure, args);
+    }
+
+    /// <summary>
+    /// Runs git on the far end of an ssh connection.
+    ///
+    /// There is no exit status here, deliberately. Carrying one back would
+    /// need a temporary file on the user's server for every poll, and no
+    /// caller in this file distinguishes "git failed" from "git printed
+    /// nothing": a directory that is not a repository, a file that is not
+    /// there and a clean tree all mean an empty answer, which is what the
+    /// panel shows either way. A connection that is genuinely broken is
+    /// reported by <see cref="RemoteProblemAsync"/> instead, which is a
+    /// different question with a different answer.
+    /// </summary>
+    private static async Task<GitResult> RunRemoteAsync(
+        SessionLocation at, CancellationToken ct, string[] args)
+    {
+        var channel = await SshGitChannels.GetAsync(at.Remote!, ct);
+        if (channel is not { IsUsable: true })
+            return new GitResult(false, "", channel?.Problem ?? "no connection");
+
+        var argv = new string[args.Length + 1];
+        argv[0] = "git";
+        args.CopyTo(argv, 1);
+
+        string output = await channel.RunAsync(at.Path, argv, ct);
+        return new GitResult(true, output, "");
+    }
+
+    private static async Task<GitResult> RunLocalAsync(
         string workingDirectory, CancellationToken ct, bool allowFailure, params string[] args)
     {
         var psi = new ProcessStartInfo("git")

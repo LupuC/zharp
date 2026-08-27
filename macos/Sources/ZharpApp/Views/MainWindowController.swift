@@ -1,4 +1,5 @@
 import AppKit
+import UserNotifications
 import ZharpCore
 
 /// Title-bar strip: the gaps between the controls drag the window, exactly like
@@ -744,6 +745,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                                       scrollbackLines: settings.scrollbackLines)
         session.overrideNoColor = settings.overrideNoColor
         session.extraEnvironment = shell.extraEnvironment
+        showCodexTrustNotice(session)
 
         let view = TerminalView(session: session, fontSize: settings.fontSize,
                                 fontFamily: settings.fontFamily)
@@ -881,10 +883,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             // The settings view is kept cached; the tab just goes away.
             settingsItem = nil
         } else {
+            // Before the teardown: the clock and the spool subscription both
+            // outlive the views, and the spool is process wide.
+            item.stopAgentClock()
             item.view?.dispose()
             item.session?.dispose()
         }
         sessions.remove(at: index)
+        // Whatever this tab was waiting for, nobody is waiting for it now.
+        Self.refreshDockBadge()
 
         if sessions.isEmpty {
             refreshVisibleSessions()
@@ -915,6 +922,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func activate(_ item: SessionItem) {
         active = item
         emptyState.isHidden = true
+
+        // Looking at the tab is what clears its badge: whatever the agent
+        // wants is now on screen in front of you.
+        item.markSeen()
 
         let content = item.content
         if content.superview !== terminalHost {
@@ -1295,6 +1306,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// A session reports where it is and when it has finished a command, and
     /// both change what the panel should be showing. OSC 7 and OSC 133 already
     /// carry them, so nothing here polls.
+    ///
+    /// Everything here is window scoped, which is why it is re-pointed by
+    /// `adopt` as well as set by `addTab`: a tab carries its shell between
+    /// windows, and the panel, the badge and the Dock all belong to whichever
+    /// window is holding it at the time.
     private func watchForChanges(_ item: SessionItem) {
         item.directoryChanged = { [weak self, weak item] _ in
             guard let self, let item, self.active === item else { return }
@@ -1306,6 +1322,139 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             // the one case updateDiffButton() has nothing to say about.
             self.refreshDiffTotals()
         }
+        item.attentionChanged = { [weak self] item in
+            self?.onSessionAttentionChanged(item)
+        }
+        // The agent says which file it just wrote; the panel is what shows it.
+        item.agentTouchedFile = { [weak self] item, path in
+            self?.followAgentEdit(item, path)
+        }
+    }
+
+    // ---------------------------------------------------------------- agent status
+
+    /// Explains, once, that Codex is about to ask whether to trust the hooks
+    /// Zharp just wrote.
+    ///
+    /// Codex will not run a hook it has not been told to trust, and that is a
+    /// good rule, exactly because a program writing hooks into your agent is
+    /// the case it guards. Zharp does not try to route around it. But a Codex
+    /// tab that reports nothing looks broken rather than unapproved, so the
+    /// user is told what to expect.
+    ///
+    /// Written into the emulator before the shell starts, while the screen is
+    /// still empty. Feeding it later would land in the middle of a prompt line
+    /// and corrupt it.
+    private func showCodexTrustNotice(_ session: TerminalSession) {
+        guard settings.agentIntegration else { return }
+        guard let script = CodexIntegration.scriptPath else { return }
+        if settings.codexNoticeFor == script { return }
+        guard CodexIntegration.isConnected() else { return }
+
+        session.emulator.feed(text: "\u{1b}[2mZharp installed status hooks for Codex. "
+            + "Codex will ask you to trust them the next time it starts.\u{1b}[0m\r\n")
+
+        settings.codexNoticeFor = script
+        settings.save()
+    }
+
+    /// An agent in one of this window's tabs has started or stopped needing you.
+    ///
+    /// The tab card carries a badge for itself. This is about the case the
+    /// badge cannot cover: the tab is not the one on screen, or Zharp is not
+    /// the app you are looking at. Then it is worth saying so out loud, because
+    /// the whole point of running several agents is not watching them.
+    private func onSessionAttentionChanged(_ item: SessionItem) {
+        // Both edges: the Dock mark counts what is still waiting, so it has to
+        // come down again as well as go up.
+        Self.refreshDockBadge()
+
+        guard item.needsAttention else { return }
+
+        // Already in front of them. The status line says the rest.
+        if active === item, NSApp.isActive, window?.isKeyWindow == true {
+            item.markSeen()
+            return
+        }
+
+        // The tab always carries its badge. This is only about reaching you
+        // somewhere else, which is exactly the part worth being able to switch
+        // off, so it is the only part the setting governs.
+        guard settings.agentNotifications else { return }
+
+        // The conventional macOS "over here": the Dock icon bounces, then keeps
+        // its mark until Zharp is brought forward. Deliberately not a window
+        // that steals focus - the user is in the middle of something, and an
+        // agent waiting is not an emergency.
+        NSApp.requestUserAttention(.informationalRequest)
+        notifyAgentWaiting(item)
+    }
+
+    /// Marks the Dock icon with how many sessions are waiting, across every
+    /// window rather than this one.
+    ///
+    /// The Windows build flashes the taskbar and stops there. A Dock badge is
+    /// the closer equivalent because it persists: the bounce is over in a
+    /// second, and the case this exists for is an agent that got blocked while
+    /// you were somewhere else entirely.
+    static func refreshDockBadge() {
+        let waiting = App.windows.reduce(0) { total, window in
+            total + window.sessions.filter { $0.needsAttention }.count
+        }
+        NSApp.dockTile.badgeLabel = waiting > 0 ? String(waiting) : nil
+    }
+
+    private func notifyAgentWaiting(_ item: SessionItem) {
+        // Read on the main thread; the authorization callback is not on it.
+        let title = "\(item.sessionName) needs you"
+        let body = "\(item.displaySubtitle) - \(item.subtitle)"
+
+        // Keyed on the tab, so an agent that asks twice replaces its own
+        // earlier line rather than stacking a pile from one session in
+        // Notification Center. Unlike a Windows toast, these persist.
+        let identifier = "zharp.agent.\(item.id)"
+        let session = item.id
+
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            // A notification is a courtesy. The tab badge and the Dock have
+            // already said it, so a refusal is not worth reporting.
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            // Tagged so the click lands on this session. Without it every
+            // notification Zharp raises goes to the same handler, and an agent
+            // asking a question would open the update page.
+            content.userInfo = [
+                App.notificationAction: "agent",
+                App.notificationSession: session,
+            ]
+            center.add(UNNotificationRequest(identifier: identifier,
+                                             content: content, trigger: nil))
+        }
+        App.log("agent notify: \(title) - \(body)")
+    }
+
+    /// Brings up the session a notification was raised for. The tab may have
+    /// been dragged into another window, or closed outright, since it was
+    /// posted, so the session is looked up rather than remembered.
+    static func showAgentSession(_ id: Int) {
+        for window in App.windows {
+            guard let item = window.sessions.first(where: { $0.id == id }) else { continue }
+            NSApp.activate(ignoringOtherApps: true)
+            window.window?.makeKeyAndOrderFront(nil)
+            window.activate(item)
+            return
+        }
+    }
+
+    /// Opens the file the agent just wrote, when this tab is the one on screen
+    /// and its changes panel is open. Following a file in a tab you cannot see
+    /// would move the panel out from under whatever you are actually reading.
+    private func followAgentEdit(_ item: SessionItem, _ path: String) {
+        guard active === item, isDiffOpen else { return }
+        diffPanel.follow(path)
     }
 
     // ---------------------------------------------------------------- settings page
@@ -1640,11 +1789,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             let mark = item === active ? "*" : " "
             App.log("\(mark) title=\(item.displayTitle) | sub=\(item.displaySubtitle) "
                     + "| agent=\(item.hasAgent ? item.agentGlyph : "-") "
+                    + "| needs=\(item.needsAttention) "
                     + "| kind=\(item.kindLabel) | shell=\(item.shellId ?? "default")")
         }
         App.log("footer: \(sidebarWordmark.stringValue) \(sidebarVersion.stringValue) "
                 + "| searchVisible=\(!tabSearchField.isHidden) "
                 + "| updateBadge=\(!(updateBadge?.isHidden ?? true))")
+        App.log("dock: badge=\(NSApp.dockTile.badgeLabel ?? "-") | appActive=\(NSApp.isActive)")
+        if isDiffOpen {
+            App.log("=== CHANGES ===")
+            App.log(diffPanel.debugState())
+        }
 
         guard let emu = active?.session?.emulator else {
             App.log("=== no active terminal ===")
@@ -1870,12 +2025,21 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
 
         for item in sessions {
+            item.stopAgentClock()
             item.view?.dispose()
             item.session?.dispose()
         }
         sessions.removeAll()
+        Self.refreshDockBadge()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
+    }
+
+    /// Bringing the window forward is seeing what is in it. Without this a tab
+    /// that was already the active one keeps its badge after you have answered
+    /// the agent, because nothing else calls `activate` on it.
+    func windowDidBecomeKey(_ notification: Notification) {
+        active?.markSeen()
     }
 
     func windowDidResize(_ notification: Notification) {

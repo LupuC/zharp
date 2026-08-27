@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
+using Zharp.Core.Remote;
 using Zharp.Core.Terminal;
 
 namespace Zharp.App.Controls;
@@ -86,8 +87,8 @@ public sealed partial class DiffView : UserControl
     private readonly DispatcherQueue _dispatcher = DispatcherQueue.GetForCurrentThread();
     private readonly DispatcherQueueTimer _poll;
 
-    private string? _repoRoot;
-    private string? _pendingCwd;
+    private SessionLocation? _repoRoot;
+    private SessionLocation? _pendingCwd;
     private CancellationTokenSource? _work;
     /// <summary>
     /// Deliberately not readonly. A List is not observable, so assigning the
@@ -124,6 +125,15 @@ public sealed partial class DiffView : UserControl
     /// </summary>
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// The same idea over ssh, slowed down. Two seconds is chosen against the
+    /// cost of running git on a local disk; the same rate against a machine
+    /// across a network is a steady trickle of traffic and remote processes
+    /// for a panel nobody may be looking at. Six seconds still catches a save
+    /// before you have finished looking away.
+    /// </summary>
+    private static readonly TimeSpan RemotePollInterval = TimeSpan.FromSeconds(6);
+
     public DiffView()
     {
         InitializeComponent();
@@ -137,13 +147,114 @@ public sealed partial class DiffView : UserControl
         Unloaded += (_, _) => _poll.Stop();
     }
 
-    /// <summary>Points the view at the directory the active session is in.</summary>
-    public async Task SetWorkingDirectoryAsync(string? cwd)
+    /// <summary>
+    /// The file an agent just wrote, waiting to be selected once the list has
+    /// caught up with it. Repo-relative, forward slashes, like git's own paths.
+    /// </summary>
+    private string? _following;
+
+    /// <summary>
+    /// How many more refreshes may go looking for it. git can take a moment to
+    /// see a write, but a file that never turns up (ignored, or written outside
+    /// the tree) must not sit there hijacking the selection forever.
+    /// </summary>
+    private int _followTries;
+
+    /// <summary>
+    /// Opens the file an AI agent has just written.
+    ///
+    /// The panel already re-reads the working tree every two seconds, so the
+    /// change would appear on its own. What this adds is which file to be
+    /// looking at: the agent is the only one who knows that, and being told
+    /// turns the panel from a thing you check into a thing you watch.
+    /// </summary>
+    public async Task FollowAsync(string absolutePath)
     {
-        if (string.Equals(_pendingCwd, cwd, StringComparison.OrdinalIgnoreCase))
+        if (_repoRoot is not { } repo)
+            return;
+
+        string relative;
+        if (repo.IsRemote)
+        {
+            // An agent running over there reports that machine's paths, which
+            // must not be run through Windows path handling: it would turn
+            // /home/me/app.ts into C:\home\me\app.ts and then decide the agent
+            // was editing outside the repository.
+            if (!PosixPath.IsUnder(repo.Path, absolutePath, out relative))
+                return;
+        }
+        else
+        {
+            string full;
+            try
+            {
+                full = System.IO.Path.GetFullPath(absolutePath);
+            }
+            catch (Exception)
+            {
+                return; // not a path we can make sense of
+            }
+
+            string root = System.IO.Path.GetFullPath(repo.Path)
+                .TrimEnd(System.IO.Path.DirectorySeparatorChar);
+            if (!full.StartsWith(root + System.IO.Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase))
+                return; // the agent is editing outside the repository on screen
+
+            relative = full[(root.Length + 1)..].Replace('\\', '/');
+        }
+
+        _following = relative;
+        _followTries = 3;
+
+        // Quiet, because the file set usually has not changed: the agent edits
+        // the same handful of files over and over, and a loud refresh would
+        // rebuild the list under the user on every save.
+        await RefreshAsync(quiet: true);
+    }
+
+    /// <summary>
+    /// Selects the followed file once it is actually in the list.
+    ///
+    /// Separate from the rebuild because most of the time there is no rebuild:
+    /// editing a file that was already changed leaves the file set identical,
+    /// and the selection still has to move.
+    /// </summary>
+    private void SelectFollowed()
+    {
+        if (_following is not { Length: > 0 } want)
+            return;
+
+        int index = _rows.FindIndex(r =>
+            string.Equals(r.Path, want, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+        {
+            // git has not noticed the write yet, so let the next poll look.
+            // Give up eventually: some writes never become a change at all.
+            if (--_followTries <= 0)
+                _following = null;
+            return;
+        }
+
+        _following = null;
+        if (FileList.SelectedIndex != index)
+            FileList.SelectedIndex = index;
+        FileList.ScrollIntoView(_rows[index]);
+    }
+
+    /// <summary>Points the view at wherever the active session is standing,
+    /// which may be on another machine.</summary>
+    public async Task SetLocationAsync(SessionLocation? where)
+    {
+        if (Equals(_pendingCwd, where))
             return;
         RememberPlace();
-        _pendingCwd = cwd;
+        _pendingCwd = where;
+
+        // A pending follow belongs to the session being left. Carrying it into
+        // the next one would open a file the user never asked about.
+        _following = null;
+
         await RefreshAsync();
     }
 
@@ -167,11 +278,13 @@ public sealed partial class DiffView : UserControl
             if (ct.IsCancellationRequested)
                 return;
 
+            _poll.Interval = _pendingCwd is { IsRemote: true } ? RemotePollInterval : PollInterval;
+
             if (_repoRoot == null)
             {
+                _following = null;
                 SetTotals(0, 0);
-                ShowEmpty("Not a git repository",
-                    "Open a session inside one and this fills in.");
+                await ShowNothingHereAsync(ct);
                 return;
             }
 
@@ -180,9 +293,9 @@ public sealed partial class DiffView : UserControl
             if (ct.IsCancellationRequested)
                 return;
 
-            RepoText.Text = System.IO.Path.GetFileName(
-                _repoRoot.TrimEnd(System.IO.Path.DirectorySeparatorChar));
+            RepoText.Text = _repoRoot.DisplayName;
             BranchText.Text = branch is { Length: > 0 } ? $"on {branch}" : "";
+            ShowHost(_repoRoot.Remote?.Label);
 
             if (changes.Count == 0)
             {
@@ -239,11 +352,14 @@ public sealed partial class DiffView : UserControl
 
                 FileList.ItemsSource = _rows;
 
-                // Prefer the file this session was reading, then the file
-                // this repository was last left on, then the first.
-                string? want = selectedPath;
+                // Prefer the file an agent has just written, then the file this
+                // session was reading, then the file this repository was last
+                // left on, then the first. The agent's file goes first because
+                // it is the most recent statement of what matters, and picking
+                // it here rather than afterwards avoids selecting twice.
+                string? want = _following ?? selectedPath;
                 if (want == null && _repoRoot != null
-                    && _placeInRepo.TryGetValue(_repoRoot, out var place))
+                    && _placeInRepo.TryGetValue(_repoRoot.ToString(), out var place))
                     want = place.Path;
 
                 int keep = want == null
@@ -269,6 +385,11 @@ public sealed partial class DiffView : UserControl
                 }
             }
 
+            // After the list is settled, whether it was rebuilt or not: an edit
+            // to a file already in the list changes nothing about the set, and
+            // the selection still has to move to it.
+            SelectFollowed();
+
             _ = FillCountsAsync(ct, quiet);
         }
         catch (OperationCanceledException)
@@ -293,6 +414,12 @@ public sealed partial class DiffView : UserControl
         if (_repoRoot == null)
             return;
 
+        if (_repoRoot.IsRemote)
+        {
+            await FillCountsRemotelyAsync(_repoRoot, ct, quiet);
+            return;
+        }
+
         int added = 0, removed = 0;
 
         foreach (var row in _rows.ToArray())
@@ -314,6 +441,53 @@ public sealed partial class DiffView : UserControl
             {
                 // Unreadable file: count it as nothing rather than stop.
             }
+
+            added += a;
+            removed += r;
+
+            bool moved = row.Change.Added != a || row.Change.Removed != r;
+            row.Change.Added = a;
+            row.Change.Removed = r;
+            if (moved || !quiet)
+                row.CountsArrived();
+        }
+
+        if (!ct.IsCancellationRequested)
+            SetTotals(added, removed);
+    }
+
+    /// <summary>
+    /// The same counts, in one question instead of one per file.
+    ///
+    /// Reading a diff per row is affordable when each one is a local process
+    /// and the answer comes back in single milliseconds. Over ssh it is a
+    /// round trip each, repeated every poll, so twenty changed files would
+    /// mean twenty crossings of the network to put small grey numbers beside
+    /// twenty rows. `git diff --numstat` answers for the whole tree at once.
+    ///
+    /// Untracked files are absent from it, because git has nothing to compare
+    /// them against, and are counted individually. There are usually none, and
+    /// a handful at most.
+    /// </summary>
+    private async Task FillCountsRemotelyAsync(
+        SessionLocation repo, CancellationToken ct, bool quiet)
+    {
+        var totals = await GitStatus.NumstatAsync(repo, ct);
+        if (ct.IsCancellationRequested)
+            return;
+
+        int added = 0, removed = 0;
+
+        foreach (var row in _rows.ToArray())
+        {
+            if (ct.IsCancellationRequested)
+                return;
+
+            int a = 0, r = 0;
+            if (totals.TryGetValue(row.Path, out var counted))
+                (a, r) = counted;
+            else if (row.Change.Kind == GitChangeKind.Untracked)
+                a = await GitStatus.CountUntrackedAsync(repo, row.Path, ct);
 
             added += a;
             removed += r;
@@ -378,11 +552,11 @@ public sealed partial class DiffView : UserControl
     /// <summary>Stores where the current repository is being left.</summary>
     private void RememberPlace()
     {
-        if (_repoRoot is not { Length: > 0 } repo)
+        if (_repoRoot is not { } repo)
             return;
         if (FileList.SelectedItem is not DiffFileRow row)
             return;
-        _placeInRepo[repo] = (row.Path, DiffScroll.VerticalOffset);
+        _placeInRepo[repo.ToString()] = (row.Path, DiffScroll.VerticalOffset);
     }
 
     private string? _shownPath;
@@ -417,7 +591,7 @@ public sealed partial class DiffView : UserControl
             // move past content it has not laid out yet, so the offset has to
             // wait for the paragraphs just added to exist.
             if (!sameFile && _repoRoot != null
-                && _placeInRepo.TryGetValue(_repoRoot, out var place)
+                && _placeInRepo.TryGetValue(_repoRoot.ToString(), out var place)
                 && place.Path == row.Path && place.Scroll > 0)
             {
                 double target = place.Scroll;
@@ -807,7 +981,94 @@ public sealed partial class DiffView : UserControl
             RenderDiff(current, keepScroll: true);
     }
 
-    public void SetUiZoom(double zoom) => ChromeZoom.Apply(this, zoom);
+    public void SetUiZoom(double zoom)
+    {
+        _uiZoom = zoom <= 0 ? 1 : zoom;
+        ChromeZoom.Apply(this, zoom);
+        ApplyFileListHeight(_fileListHeight);
+    }
+
+    // ------------------------------------------------------------ file list size
+
+    private double _uiZoom = 1;
+    private double _fileListHeight = 160;
+    private bool _resizing;
+    private double _dragStartY;
+    private double _dragStartHeight;
+
+    /// <summary>Smallest useful list: about two rows plus its padding.</summary>
+    private const double MinFileListHeight = 64;
+
+    /// <summary>And the diff always keeps this much, however far you drag.</summary>
+    private const double MinDiffHeight = 120;
+
+    /// <summary>
+    /// Sets the stored height, in unzoomed pixels, so it survives a zoom change
+    /// the same way the panel's own width does.
+    /// </summary>
+    public void SetFileListHeight(double height)
+    {
+        _fileListHeight = height <= 0 ? 160 : height;
+        ApplyFileListHeight(_fileListHeight);
+    }
+
+    /// <summary>The height actually in use, unzoomed, for saving.</summary>
+    public double FileListHeight => _fileListHeight;
+
+    private void ApplyFileListHeight(double unzoomed)
+    {
+        double wanted = unzoomed * _uiZoom;
+        FileListRow.Height = new GridLength(Clamp(wanted));
+    }
+
+    /// <summary>
+    /// Keeps the list usable and the diff visible. Done against the panel's
+    /// current height, so shrinking the window cannot leave the diff with no
+    /// room at all.
+    /// </summary>
+    private double Clamp(double height)
+    {
+        double available = ActualHeight - HeaderBar.ActualHeight - MinDiffHeight;
+        double max = Math.Max(MinFileListHeight, available);
+        return Math.Clamp(height, MinFileListHeight, max);
+    }
+
+    private void OnFileListSplitterPressed(object sender, PointerRoutedEventArgs e)
+    {
+        _resizing = true;
+        _dragStartY = e.GetCurrentPoint(this).Position.Y;
+        _dragStartHeight = FileList.ActualHeight;
+        ((UIElement)sender).CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+
+    private void OnFileListSplitterMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_resizing)
+            return;
+        double y = e.GetCurrentPoint(this).Position.Y;
+        FileListRow.Height = new GridLength(Clamp(_dragStartHeight + (y - _dragStartY)));
+        e.Handled = true;
+    }
+
+    private void OnFileListSplitterReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_resizing)
+            return;
+        _resizing = false;
+        ((UIElement)sender).ReleasePointerCapture(e.Pointer);
+
+        // Stored unzoomed, so the panel looks the same at any zoom.
+        _fileListHeight = FileList.ActualHeight / _uiZoom;
+        FileListHeightChanged?.Invoke(_fileListHeight);
+        e.Handled = true;
+    }
+
+    private void OnFileListSplitterCaptureLost(object sender, PointerRoutedEventArgs e) =>
+        _resizing = false;
+
+    /// <summary>Raised when a drag ends, so the window can save it.</summary>
+    public event Action<double>? FileListHeightChanged;
 
     private static Color FromRgb(uint rgb) => Color.FromArgb(
         0xFF, (byte)((rgb >> 16) & 0xFF), (byte)((rgb >> 8) & 0xFF), (byte)(rgb & 0xFF));
@@ -851,6 +1112,70 @@ public sealed partial class DiffView : UserControl
         EmptyState.Visibility = Visibility.Collapsed;
         FileList.Visibility = Visibility.Visible;
         DiffScroll.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// Says why there is no file list, which over ssh is rarely "not a git
+    /// repository".
+    ///
+    /// The distinction matters because each of these has a different thing the
+    /// user can do about it, and the panel used to answer all of them by
+    /// showing the last local repository it had seen: the one wrong answer
+    /// that looks exactly like a right one.
+    /// </summary>
+    private async Task ShowNothingHereAsync(CancellationToken ct)
+    {
+        var at = _pendingCwd;
+        ShowHost(at?.Remote?.Label);
+
+        if (at is not { IsRemote: true })
+        {
+            ShowEmpty("Not a git repository",
+                "Open a session inside one and this fills in.");
+            return;
+        }
+
+        string host = at.Remote!.Label;
+        RepoText.Text = "";
+        BranchText.Text = "";
+
+        if (!at.Remote.CanConnect)
+        {
+            ShowEmpty($"Connected to {host}",
+                "Zharp did not see the ssh command that got here, so it has no way to reach the same machine on its own.");
+            return;
+        }
+
+        // Before asking whether the machine can be reached, because without a
+        // directory there is nothing to ask it. Connecting here would be a
+        // login on someone's server to find out something already known.
+        if (!at.HasPath)
+        {
+            ShowEmpty($"Somewhere on {host}",
+                "The shell over there has not said which directory it is in. Zharp reads OSC 7, and the window title as a fallback.");
+            return;
+        }
+
+        if (await GitStatus.RemoteProblemAsync(at.Remote, ct) is { Length: > 0 } problem)
+        {
+            ShowEmpty($"Cannot read git on {host}", problem);
+            return;
+        }
+
+        ShowEmpty("Not a git repository",
+            $"{at.Path} on {host} is not inside one.");
+    }
+
+    /// <summary>
+    /// Names the machine in the header while the panel is showing another
+    /// computer's work. Absent for a local repository, which is most of them:
+    /// a chip saying "this machine" on every session would be noise.
+    /// </summary>
+    private void ShowHost(string? label)
+    {
+        bool remote = !string.IsNullOrEmpty(label);
+        HostChip.Visibility = remote ? Visibility.Visible : Visibility.Collapsed;
+        HostText.Text = label ?? "";
     }
 
     private async void OnRefreshClick(object sender, RoutedEventArgs e) => await RefreshAsync();

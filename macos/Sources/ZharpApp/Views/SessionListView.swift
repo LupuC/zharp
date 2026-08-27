@@ -145,6 +145,7 @@ final class SessionRowView: RoundedRowView {
     private let titleLabel = TailTextField()
     private let subtitleLabel = TailTextField()
     private let pillTitle = NSTextField(labelWithString: "")
+    private let attentionDot = AttentionDotView()
     private let closeButton: IconButton
 
     var onClose: (() -> Void)?
@@ -206,7 +207,6 @@ final class SessionRowView: RoundedRowView {
         titleLabel.fontSize = item.z12
         titleLabel.emphasisBold = true
         subtitleLabel.fontSize = item.z11
-        subtitleLabel.opacity = 0.55
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -214,6 +214,8 @@ final class SessionRowView: RoundedRowView {
         addSubview(titleLabel)
         addSubview(subtitleLabel)
         addSubview(closeButton)
+        // Last, so it draws over the chip it overhangs.
+        addSubview(attentionDot)
 
         let chipSide = item.z24
         NSLayoutConstraint.activate([
@@ -224,6 +226,14 @@ final class SessionRowView: RoundedRowView {
             iconChip.heightAnchor.constraint(equalToConstant: chipSide),
             iconLabel.centerXAnchor.constraint(equalTo: iconChip.centerXAnchor),
             iconLabel.centerYAnchor.constraint(equalTo: iconChip.centerYAnchor),
+
+            // A sibling of the chip rather than a child of it: a badge is only
+            // a badge when it breaks the edge of the thing it sits on, and a
+            // chip that ever gains a clipping layer would swallow a child.
+            attentionDot.widthAnchor.constraint(equalToConstant: 8),
+            attentionDot.heightAnchor.constraint(equalToConstant: 8),
+            attentionDot.trailingAnchor.constraint(equalTo: iconChip.trailingAnchor, constant: 2),
+            attentionDot.topAnchor.constraint(equalTo: iconChip.topAnchor, constant: -2),
 
             titleLabel.leadingAnchor.constraint(equalTo: iconChip.trailingAnchor, constant: 8),
             titleLabel.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
@@ -248,11 +258,19 @@ final class SessionRowView: RoundedRowView {
         addSubview(iconLabel)
         addSubview(titleLabel)
         addSubview(closeButton)
+        addSubview(attentionDot)
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: max(24, 26 * zoom)),
             iconLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             iconLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            // Smaller here and on the pill, where it hangs off a bare glyph
+            // rather than a chip and has less room before the title starts.
+            attentionDot.widthAnchor.constraint(equalToConstant: 7),
+            attentionDot.heightAnchor.constraint(equalToConstant: 7),
+            attentionDot.trailingAnchor.constraint(equalTo: iconLabel.trailingAnchor, constant: 4),
+            attentionDot.topAnchor.constraint(equalTo: iconLabel.topAnchor, constant: -2),
 
             titleLabel.leadingAnchor.constraint(equalTo: iconLabel.trailingAnchor, constant: 8),
             titleLabel.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
@@ -274,11 +292,17 @@ final class SessionRowView: RoundedRowView {
         addSubview(iconLabel)
         addSubview(pillTitle)
         addSubview(closeButton)
+        addSubview(attentionDot)
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: item.z26),
             iconLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             iconLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            attentionDot.widthAnchor.constraint(equalToConstant: 7),
+            attentionDot.heightAnchor.constraint(equalToConstant: 7),
+            attentionDot.trailingAnchor.constraint(equalTo: iconLabel.trailingAnchor, constant: 4),
+            attentionDot.topAnchor.constraint(equalTo: iconLabel.topAnchor, constant: -2),
 
             pillTitle.leadingAnchor.constraint(equalTo: iconLabel.trailingAnchor, constant: 6),
             pillTitle.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -301,7 +325,13 @@ final class SessionRowView: RoundedRowView {
         subtitleLabel.textColor = Chrome.current.text
         subtitleLabel.tailFirst = item.subtitleTailFirst
         subtitleLabel.tint = item.subtitleTint
+        // Weight and dimming both track the agent: the one line asking you for
+        // something is the one line that gets to be bold and undimmed.
+        subtitleLabel.emphasisBold = item.subtitleBold
+        subtitleLabel.opacity = item.subtitleOpacity
         subtitleLabel.isHidden = !item.subtitleVisible
+        attentionDot.isHidden = !item.needsAttention
+        attentionDot.needsDisplay = true
         pillTitle.stringValue = item.compactTitle
         pillTitle.textColor = Chrome.current.text
         closeButton.tint = Chrome.current.subtleIcon
@@ -320,5 +350,38 @@ final class SessionRowView: RoundedRowView {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         if !isSelected { closeButton.animator().alphaValue = 0 }
+    }
+}
+
+/// The "an agent on this tab is waiting for you" dot, breaking the corner of
+/// the tab's icon. Amber rather than red: it is a request, not a failure.
+final class AttentionDotView: NSView {
+    /// The ring is what keeps the dot legible where it overlaps the icon.
+    private static let ringWidth: CGFloat = 1.5
+
+    override var isFlipped: Bool { true }
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("not supported") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // The ring reads as a hole punched in whatever the dot sits on, so it
+        // takes the chrome's own color at full alpha. The Windows build hard
+        // codes two values because it has two themes; here the sidebar is
+        // painted in the theme's background, and a fixed near-black ring would
+        // be a grey halo on the other eight.
+        Chrome.current.chromeWash.withAlphaComponent(1).setFill()
+        NSBezierPath(ovalIn: bounds).fill()
+
+        let fill = Chrome.current.isDark
+            ? ChromeColors.rgb(0xF0B429, alpha: 1)
+            : ChromeColors.rgb(0xC77700, alpha: 1)
+        fill.setFill()
+        NSBezierPath(ovalIn: bounds.insetBy(dx: Self.ringWidth,
+                                            dy: Self.ringWidth)).fill()
     }
 }

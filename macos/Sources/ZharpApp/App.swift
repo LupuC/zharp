@@ -65,8 +65,33 @@ final class App: NSObject, NSApplicationDelegate {
         Icons.registerFont()
         buildMenu()
 
-        // Notification taps open Settings > About, the update landing spot.
+        // Zharp raises more than one kind of notification now, so a tap has to
+        // be routed rather than always landing on the update page.
         UNUserNotificationCenter.current().delegate = self
+
+        // Reports from agents that cannot write to a terminal arrive here.
+        // Started before any session exists, so nothing can be missed.
+        AgentSpool.shared.start()
+
+        // Off the launch path: these read and may rewrite files on disk, and
+        // nothing on screen is waiting for the answer. New sessions pick the
+        // hooks up whenever it lands.
+        let integration = App.settings.agentIntegration
+        DispatchQueue.global(qos: .utility).async {
+            ClaudeCodeIntegration.sync(enabled: integration)
+
+            // Codex will not run a hook it has not been told to trust, so a
+            // fresh install owes the user an explanation. Recorded rather than
+            // acted on here: the place to say it is a terminal, and there is
+            // not one yet.
+            let wrote = CodexIntegration.sync(enabled: integration)
+
+            OpenCodeIntegration.sync(enabled: integration)
+
+            if wrote {
+                DispatchQueue.main.async { App.settings.codexNoticeFor = "" }
+            }
+        }
 
         let controller = MainWindowController(restoring: true)
         controller.showWindow(nil)
@@ -234,9 +259,27 @@ final class App: NSObject, NSApplicationDelegate {
 }
 
 extension App: UNUserNotificationCenterDelegate {
+
+    /// Key in a notification's userInfo naming what raised it. Absent means the
+    /// update notifier, which is the only one that predates the routing.
+    static let notificationAction = "action"
+
+    /// Which tab an agent notification was about, as `SessionItem.id`.
+    static let notificationSession = "session"
+
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse) async {
-        await MainActor.run { App.current?.showUpdatePage() }
+        let info = response.notification.request.content.userInfo
+        let action = info[App.notificationAction] as? String
+        let session = info[App.notificationSession] as? Int
+
+        await MainActor.run {
+            if action == "agent", let session {
+                MainWindowController.showAgentSession(session)
+            } else {
+                App.current?.showUpdatePage()
+            }
+        }
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter,

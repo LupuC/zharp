@@ -401,6 +401,39 @@
                     </Grid>
 
                     <Rectangle Style="{StaticResource SectionDivider}" />
+                    <TextBlock Text="Notifications" Style="{StaticResource SectionHeader}" />
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="When an AI agent needs you" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Desktop notification and a taskbar flash while Zharp is not the window in front. Click it to jump to the session. The tab always shows it either way."
+                                       Style="{StaticResource SettingDescription}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch x:Name="AgentAlertToggle" Grid.Column="1" MinWidth="0"
+                                      OnContent="" OffContent="" Margin="0,-4,-32,-8"
+                                      VerticalAlignment="Center" Toggled="OnAgentAlertToggled" />
+                    </Grid>
+
+                    <Grid ColumnSpacing="16" Padding="0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="Read git over ssh" Style="{StaticResource SettingTitle}" />
+                            <TextBlock Text="Shows changes from the machine you are connected to. Zharp opens one read-only connection per host, using a key: it never asks for a password. Off means the panel says where you are and nothing more."
+                                       Style="{StaticResource SettingDescription}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ToggleSwitch x:Name="RemoteGitToggle" Grid.Column="1" MinWidth="0"
+                                      OnContent="" OffContent="" Margin="0,-4,-32,-8"
+                                      VerticalAlignment="Center" Toggled="OnRemoteGitToggled" />
+                    </Grid>
+
+                    <Rectangle Style="{StaticResource SectionDivider}" />
                 </StackPanel>
 
                 <!-- ============ Shell ============ -->

@@ -363,6 +363,8 @@ public sealed partial class MainWindow : Window
             OverrideNoColor = _settings.OverrideNoColor,
             ExtraEnvironment = shell.ExtraEnvironment,
         };
+        ShowCodexTrustNotice(session);
+
         var view = new TerminalView(session, _settings.FontSize, _settings.FontFamily)
         {
             DefaultCursorStyleCode = AppSettings.CursorStyleToCode(_settings.CursorStyle),
@@ -378,19 +380,199 @@ public sealed partial class MainWindow : Window
 
         // cd'ing into or out of a repository decides whether the title bar
         // carries a diff button at all, so the button follows the prompt.
-        session.WorkingDirectoryChanged += _ =>
+        // Location rather than directory: typing `ssh` changes which machine
+        // the question is about without the local directory moving at all.
+        session.LocationChanged += _ =>
             DispatcherQueue.TryEnqueue(UpdateDiffButtonAsync);
         item.ApplyDisplayOptions(_settings.SidebarTitleIsCwd, _settings.SidebarShowPath);
         item.SetUiZoom(_settings.UiZoom);
 
         session.CommandExecuted += cmd =>
             HistoryStore.Instance.Add(cmd, session.WorkingDirectory, shell.DisplayName);
+
+        // Both of these resolve the owning window when they fire rather than
+        // closing over this one. A tab can be dragged into another window with
+        // its shell still running, and the badge, the taskbar and the changes
+        // panel all belong to whichever window is holding it at the time.
+        item.AttentionChanged += owner =>
+            OwnerOf(owner)?.OnSessionAttentionChanged(owner);
+
+        // The agent says which file it just wrote; the panel is what shows it.
+        item.AgentTouchedFile += (owner, path) =>
+            OwnerOf(owner)?.FollowAgentEdit(owner, path);
+
         HookSessionToWindow(item);
 
         _sessions.Add(item);
         RefreshVisibleSessions();
         ActivateSession(item);
     }
+
+    /// <summary>
+    /// Explains, once, that Codex is about to ask whether to trust the hooks
+    /// Zharp just wrote.
+    ///
+    /// Codex will not run a hook it has not been told to trust, and that is a
+    /// good rule, exactly because a program writing hooks into your agent is
+    /// the case it guards. Zharp does not try to route around it. But a Codex
+    /// tab that reports nothing looks broken rather than unapproved, so the
+    /// user is told what to expect.
+    ///
+    /// Written into the emulator before the shell starts, while the screen is
+    /// still empty. Feeding it later would land in the middle of a prompt line
+    /// and corrupt it.
+    /// </summary>
+    private void ShowCodexTrustNotice(TerminalSession session)
+    {
+        if (!_settings.AgentIntegration)
+            return;
+        if (_settings.CodexNoticeFor == CodexIntegration.ScriptPath)
+            return;
+        if (!CodexIntegration.IsConnected())
+            return;
+
+        session.Emulator.Feed(System.Text.Encoding.UTF8.GetBytes(
+            "\x1b[2mZharp installed status hooks for Codex. "
+            + "Codex will ask you to trust them the next time it starts.\x1b[0m\r\n"));
+
+        _settings.CodexNoticeFor = CodexIntegration.ScriptPath;
+        _settings.Save();
+    }
+
+    /// <summary>Whichever window is currently holding this tab.</summary>
+    private static MainWindow? OwnerOf(SessionItem item) =>
+        App.Windows.FirstOrDefault(w => w._sessions.Contains(item));
+
+    /// <summary>
+    /// Opens the file the agent just wrote, when this tab is the one on screen
+    /// and its changes panel is open. Following a file in a tab you cannot see
+    /// would move the panel out from under whatever you are actually reading.
+    /// </summary>
+    private void FollowAgentEdit(SessionItem item, string path)
+    {
+        if (!ReferenceEquals(_active, item) || _diffView == null)
+            return;
+        if (DiffPanel.Visibility != Visibility.Visible)
+            return;
+        _ = _diffView.FollowAsync(path);
+    }
+
+    /// <summary>
+    /// An agent in one of this window's tabs has become blocked on the user.
+    ///
+    /// The tab card carries a badge for itself. This is about the case the
+    /// badge cannot cover: the tab is not the one on screen, or Zharp is not
+    /// the window you are looking at. Then it is worth saying so out loud,
+    /// because the whole point of running several agents is not watching them.
+    /// </summary>
+    private void OnSessionAttentionChanged(SessionItem item)
+    {
+        if (!item.NeedsAttention)
+            return;
+
+        // Already in front of them. The status line says the rest.
+        bool visible = ReferenceEquals(_active, item) && IsForeground();
+        if (visible)
+        {
+            item.MarkSeen();
+            return;
+        }
+
+        // The tab always carries its badge. This is only about reaching you
+        // somewhere else, which is exactly the part worth being able to switch
+        // off, so it is the only part the setting governs.
+        if (!_settings.AgentNotifications)
+            return;
+
+        FlashTaskbar();
+
+        try
+        {
+            var toast = new Microsoft.Windows.AppNotifications.Builder.AppNotificationBuilder()
+                .AddText($"{item.SessionName} needs you")
+                .AddText($"{item.DisplaySubtitle} - {item.Subtitle}")
+                // Tagged so the click lands on this session. Without it every
+                // notification Zharp raises went to the same handler, and an
+                // agent asking a question opened the update page.
+                .AddArgument("action", "agent")
+                .AddArgument("session", item.Id.ToString())
+                .BuildNotification();
+            Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(toast);
+            App.Log($"agent toast: {item.SessionName} - {item.DisplaySubtitle}");
+        }
+        catch (Exception ex)
+        {
+            // A toast is a courtesy. The badge and the taskbar already said it.
+            App.Log($"agent toast failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Brings up the session a notification was raised for. The tab may have
+    /// been dragged to another window, or closed outright, since the toast was
+    /// shown, so the session is looked up rather than remembered.
+    /// </summary>
+    internal static void ShowAgentSession(int id)
+    {
+        foreach (var window in App.Windows.ToList())
+        {
+            var item = window._sessions.FirstOrDefault(s => s.Id == id);
+            if (item == null)
+                continue;
+            window.Activate();
+            window.ActivateSession(item);
+            return;
+        }
+    }
+
+    private bool IsForeground() =>
+        GetForegroundWindow() == WinRT.Interop.WindowNative.GetWindowHandle(this);
+
+    /// <summary>
+    /// The conventional Windows "over here" - the taskbar button flashes until
+    /// the window is brought forward, and stays highlighted after it stops.
+    /// Deliberately not a window that steals focus: the user is in the middle
+    /// of something, and an agent waiting is not an emergency.
+    /// </summary>
+    private void FlashTaskbar()
+    {
+        try
+        {
+            var info = new FLASHWINFO
+            {
+                cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<FLASHWINFO>(),
+                hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this),
+                dwFlags = FLASHW_TRAY | FLASHW_TIMERNOFG,
+                uCount = 3,
+                dwTimeout = 0,
+            };
+            FlashWindowEx(ref info);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"agent flash: {ex.Message}");
+        }
+    }
+
+    private const uint FLASHW_TRAY = 0x00000002;
+    private const uint FLASHW_TIMERNOFG = 0x0000000C;
+
+    [System.Runtime.InteropServices.StructLayout(
+        System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct FLASHWINFO
+    {
+        public uint cbSize;
+        public IntPtr hwnd;
+        public uint dwFlags;
+        public uint uCount;
+        public uint dwTimeout;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
 
     /// <summary>Points the session's window-scoped wiring at THIS window. A tab
     /// carries its shell between windows, so the handler that closes the tab on
@@ -544,6 +726,7 @@ public sealed partial class MainWindow : Window
         }
         else
         {
+            item.StopAgentClock();
             item.View!.Dispose();
             item.Session!.Dispose();
         }
@@ -592,6 +775,10 @@ public sealed partial class MainWindow : Window
     private void ActivateSession(SessionItem item)
     {
         _active = item;
+
+        // Looking at the tab is what clears its badge. Whatever the agent
+        // wants is now on screen in front of you.
+        item.MarkSeen();
 
         // Every transition is focus-first, remove-after: if the focused element
         // leaves the tree first, XAML bounces focus to the first tab stop (the
@@ -967,6 +1154,12 @@ public sealed partial class MainWindow : Window
                 _diffView = new DiffView();
                 _diffView.SetPalette(_terminalPalette);
                 _diffView.SetFontFamily(_settings.FontFamily);
+                _diffView.SetFileListHeight(_settings.DiffFileListHeight);
+                _diffView.FileListHeightChanged += height =>
+                {
+                    _settings.DiffFileListHeight = height;
+                    _settings.Save();
+                };
                 DiffPanel.Children.Add(_diffView);
                 _diffView.Loaded += (_, _) => _diffView!.SetUiZoom(_settings.UiZoom);
             }
@@ -987,7 +1180,7 @@ public sealed partial class MainWindow : Window
             DiffButton.Visibility = Visibility.Visible;
             _diffView.SetUiZoom(_settings.UiZoom);
 
-            _ = _diffView.SetWorkingDirectoryAsync(LastTerminalDirectory());
+            _ = _diffView.SetLocationAsync(LastTerminalLocation());
             DispatcherQueue.TryEnqueue(UpdateTerminalLayerLayout);
         }
         catch (Exception ex)
@@ -1098,7 +1291,7 @@ public sealed partial class MainWindow : Window
     /// Doing so made the changes button appear on the Settings page, reporting
     /// a repository the visible page has nothing to do with.
     /// </summary>
-    private string? LastTerminalDirectory() => _active?.Session?.WorkingDirectory;
+    private Zharp.Core.Remote.SessionLocation? LastTerminalLocation() => _active?.Session?.Location;
 
     /// <summary>
     /// Shows the title bar diff button only while the active session sits
@@ -1108,16 +1301,16 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            string? cwd = LastTerminalDirectory();
-            if (string.Equals(cwd, _diffButtonCwd, StringComparison.OrdinalIgnoreCase))
+            var cwd = LastTerminalLocation();
+            if (Equals(cwd, _diffButtonCwd))
                 return;
             _diffButtonCwd = cwd;
 
-            string? repo = await GitStatus.DiscoverRepoAsync(cwd);
+            var repo = await GitStatus.DiscoverRepoAsync(cwd);
 
             // The directory may have moved on while git was answering; the
             // later call owns the button.
-            if (!string.Equals(cwd, _diffButtonCwd, StringComparison.OrdinalIgnoreCase))
+            if (!Equals(cwd, _diffButtonCwd))
                 return;
 
             bool onPage = _active?.Session == null;
@@ -1160,7 +1353,7 @@ public sealed partial class MainWindow : Window
             // The panel says "not a git repository" for itself; closing it
             // meant coming back to that session found it gone.
             if (panelOpen && _diffView != null)
-                await _diffView.SetWorkingDirectoryAsync(cwd);
+                await _diffView.SetLocationAsync(cwd);
         }
         catch (Exception ex)
         {
@@ -1169,7 +1362,7 @@ public sealed partial class MainWindow : Window
     }
 
     private Microsoft.UI.Dispatching.DispatcherQueueTimer _diffPoll = null!;
-    private string? _totalsRepo;
+    private Zharp.Core.Remote.SessionLocation? _totalsRepo;
 
     /// <summary>
     /// Keeps the title bar totals current while a repository is open, whether
@@ -1197,11 +1390,16 @@ public sealed partial class MainWindow : Window
     /// compare them against and asking it per file would undo the single-call
     /// saving entirely.
     /// </summary>
-    private async Task RefreshTotalsAsync(string repo)
+    private async Task RefreshTotalsAsync(Zharp.Core.Remote.SessionLocation repo)
     {
         try
         {
             _totalsRepo = repo;
+
+            // Same reasoning as the panel's own poll: a repository on another
+            // machine costs a network round trip to ask, so it is asked less
+            // often than one on this disk.
+            _diffPoll.Interval = TimeSpan.FromSeconds(repo.IsRemote ? 8 : 3);
 
             var numstat = await GitStatus.NumstatAsync(repo);
             int added = 0, removed = 0;
@@ -1218,7 +1416,7 @@ public sealed partial class MainWindow : Window
             }
 
             // The directory may have moved on while git was answering.
-            if (_totalsRepo == repo)
+            if (Equals(_totalsRepo, repo))
                 OnDiffTotalsChanged(added, removed);
         }
         catch (Exception ex)
@@ -1270,7 +1468,7 @@ public sealed partial class MainWindow : Window
     private void OnDiffSplitterCaptureLost(object sender, PointerRoutedEventArgs e) => _resizingDiff = false;
 
     private DiffView? _diffView;
-    private string? _diffButtonCwd;
+    private Zharp.Core.Remote.SessionLocation? _diffButtonCwd;
 
     private string? _currentBackdrop;
 
@@ -1286,9 +1484,11 @@ public sealed partial class MainWindow : Window
         OnboardingOverlay.RequestedTheme = Root.RequestedTheme;
 
         _terminalPalette = spec.CreatePalette();
+        SessionItem.IsDarkTheme = spec.IsDark;
         foreach (var item in _sessions)
         {
             item.View?.SetPalette(_terminalPalette);
+            item.ThemeChanged();
         }
         _diffView?.SetPalette(_terminalPalette);
         _diffView?.SetFontFamily(_settings.FontFamily);
@@ -2413,5 +2613,11 @@ public sealed partial class MainWindow : Window
             item.Session?.Dispose();
         }
         _sessions.Clear();
+
+        // Connections Zharp opened to read git on other machines are its own
+        // to close. Leaving them would strand an ssh process per host, still
+        // logged in to somebody's server after the terminal has gone.
+        if (App.Windows.Count == 0)
+            Zharp.Core.Remote.SshGitChannels.CloseAll();
     }
 }
