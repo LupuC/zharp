@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/LupuC/zharp/compare/windows-v0.19.1...windows-v0.20.0) (2026-08-27)
+
+
+### Features
+
+* agents report their own status, and the changes panel follows you over ssh ([#29](https://github.com/LupuC/zharp/issues/29)) ([121cc6d](https://github.com/LupuC/zharp/commit/121cc6d9c844d0a620e6f7664c64a0950cbf8fc6))
+
 ## [0.19.1](https://github.com/LupuC/zharp/compare/windows-v0.19.0...windows-v0.19.1) (2026-08-25)
 
 
